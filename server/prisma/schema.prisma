@@ -1,0 +1,70 @@
+// Prisma schema for LinkedIn Referral Automation SaaS
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String     @id @default(uuid())
+  email     String     @unique
+  password  String
+  name      String
+  resume    Resume[]
+  jobs      Job[]
+  outreach  Outreach[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model Job {
+  id         String      @id @default(uuid())
+  title      String
+  company    String
+  jobUrl     String
+  userId     String
+  user       User        @relation(fields: [userId], references: [id])
+  employees  Employee[]
+  outreach   Outreach[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+model Resume {
+  id        String    @id @default(uuid())
+  content   String
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Employee {
+  id         String      @id @default(uuid())
+  name       String
+  title      String
+  linkedIn   String
+  jobId      String
+  job        Job         @relation(fields: [jobId], references: [id])
+  outreach   Outreach[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+model Outreach {
+  id         String     @id @default(uuid())
+  status     String
+  message    String
+  employeeId String
+  employee   Employee   @relation(fields: [employeeId], references: [id])
+  jobId      String
+  job        Job        @relation(fields: [jobId], references: [id])
+  userId     String
+  user       User @relation(fields:[userId] , references:[id])
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}

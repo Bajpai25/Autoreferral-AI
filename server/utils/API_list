@@ -1,0 +1,46 @@
+Full API List (MVP Scope)
+
+Auth
+POST /api/auth/register
+
+POST /api/auth/login
+
+GET /api/auth/me
+
+POST /api/auth/logout
+
+User Setup
+POST /api/user/linkedin
+
+POST /api/user/resume
+
+GET /api/user/profile
+
+Jobs
+POST /api/job/create
+
+GET /api/job/:id
+
+LinkedIn Employee Search
+GET /api/linkedin/employees
+
+AI Message Generation
+POST /api/message/generate
+
+POST /api/message/bulk-generate
+
+Outreach
+POST /api/outreach/send
+
+POST /api/outreach/bulk-send
+
+GET /api/outreach/status/:jobId
+
+PATCH /api/outreach/:id/status
+
+POST /api/outreach/follow-up
+
+GET /api/outreach/upcoming
+
+Dashboard
+GET /api/dashboard/summary
