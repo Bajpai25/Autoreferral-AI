@@ -74,23 +74,43 @@ export async function SearchEmployee(page: Page, companyName: string): Promise<s
 
 // step 3 : visit each profile and send connection request
 
-export async function sendReferralMessage(page: Page, profileUrl: string, message: string) {
-    await page.goto(`${profileUrl}`);
-    await page.waitForTimeout(2000);
 
-    const isConnected = await page.$('button:has-text("Message")');
-    
-    if (isConnected) {
-        await page.click('button:has-text("Message")');
-        await page.fill('div.msg-form__contenteditable', message);
-        await page.click('button.msg-form__send-button');
-    } else {
-        await page.click('button:has-text("Connect")');
-        await page.click('button:has-text("Add a note")');
-        await page.fill('textarea[name="message"]', "Hi! I’d like to connect and request a referral.");
-        await page.click('button:has-text("Send")');
-        // You'd need to schedule a re-check for when they accept.
-    }
+export async function sendReferralMessage(
+  page: Page,
+  profileUrl: string,
+  message: string
+) {
+  await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
+
+  // Wait and click the "Message" button
+  const messageButton = await page.waitForSelector(
+    'button.artdeco-button--primary:has-text("Message")',
+    { state: "visible" }
+  );
+  await messageButton.click();
+
+  // Wait for the message input area to appear
+  await page.waitForSelector('div.msg-form__contenteditable', {
+    state: "visible",
+  });
+
+  // Fill the message
+  const inputBox = await page.$('div.msg-form__contenteditable');
+  if (inputBox) {
+    await inputBox.click();
+    await inputBox.fill(message);
+  }
+
+  // Click Send
+  const sendButton = await page.waitForSelector(
+    'button.msg-form__send-button',
+    { state: "visible" }
+  );
+  await sendButton.click();
+
+  console.log("Message sent successfully!");
 }
+
+
 
 
