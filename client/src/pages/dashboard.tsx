@@ -8,7 +8,6 @@ import { JobTable } from '@/components/dashboard/job-table'
 import { SettingsSheet } from '@/components/settings/settings-sheet'
 import { Button } from '@/components/ui/button'
 import { type Candidate, type Job } from '@/types'
-import { sampleJobs } from '@/utils/sample-data'
 import { Plus } from 'lucide-react'
 
 export default function DashboardPage() {
@@ -22,7 +21,7 @@ export default function DashboardPage() {
     if (saved) {
       setJobs(JSON.parse(saved))
     } else {
-      setJobs(sampleJobs)
+      setJobs([]);
     }
   }, [])
 

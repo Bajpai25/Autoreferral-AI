@@ -8,6 +8,22 @@ type HeroProps = {
 }
 
 export function Hero({ ctaHref = '/dashboard' }: HeroProps) {
+
+  function ConnectLinkedInButton() {
+
+    const params=new URLSearchParams({
+      response_type: "code",
+      client_id: import.meta.env.VITE_LINKEDIN_CLIENT_ID,
+      redirect_uri: import.meta.env.VITE_LINKEDIN_REDIRECT_URI || "http://localhost:8000/dashboard",
+      state: crypto.randomUUID(),
+      scope: "openid profile email w_member_social"
+    })
+
+  
+  
+    // Redirect user to LinkedIn auth page
+      window.location.href = `https://www.linkedin.com/oauth/v2/authorization?${params}`;
+  }
   return (
     <section className="relative overflow-hidden py-14 md:py-24">
       <motion.div
@@ -19,6 +35,9 @@ export function Hero({ ctaHref = '/dashboard' }: HeroProps) {
         <div className="inline-flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-xs text-neutral-600 shadow-sm">
           <Sparkles className="size-3.5 text-neutral-700" />
           <span>AI-Powered Outreach</span>
+          <Button onClick={ConnectLinkedInButton}>
+            Connect with LinkedIn
+          </Button>
         </div>
         <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-6xl">
           {'Automated LinkedIn Referrals.'}

@@ -9,6 +9,9 @@ type SiteHeaderProps = {
   onOpenSettings?: () => void
 }
 
+
+
+
 export function SiteHeader({ onOpenSettings = () => {} }: SiteHeaderProps) {
   const [open, setOpen] = useState(false)
   return (
@@ -25,6 +28,7 @@ export function SiteHeader({ onOpenSettings = () => {} }: SiteHeaderProps) {
           <Link to="/" className="font-semibold tracking-tight">
             AutoReferrals
           </Link>
+          
         </div>
 
         <nav className="hidden lg:flex items-center gap-6 text-sm text-neutral-700">
@@ -43,6 +47,7 @@ export function SiteHeader({ onOpenSettings = () => {} }: SiteHeaderProps) {
           <Button asChild size="sm">
             <Link to="/dashboard">Open app</Link>
           </Button>
+           
         </div>
       </div>
 
