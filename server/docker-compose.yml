@@ -1,0 +1,48 @@
+services:
+  # db:
+  #   image: postgres:15
+  #   container_name: AutoReferrals_DB
+  #   restart: always
+  #   environment:
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: Bajpai@123
+  #     POSTGRES_DB: AutoReferral
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   networks:
+  #     - app-network
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  # server:
+  #   build: .
+  #   container_name: node_server
+  #   restart: always
+  #   # env_file:
+  #   #   - .env
+  #   volumes:
+  #     - .:/app # Mount local code to container /app
+  #     - /app/node_modules
+  #   ports:
+  #     - "8000:8000"
+  #   dns:
+  #     - 8.8.8.8
+  #     - 1.1.1.1
+  #     - 8.8.4.4
+  #   networks:
+  #     - app-network
+  #   depends_on:
+  #     - db
+  #   environment:
+  #     - PORT= 8000
+  #     - DATABASE_URL= postgresql://postgres:Bajpai%40123@db:5432/AutoReferral?schema=public
+  #   command: npm run dev
+
+  # networks:
+  #   app-network:
+  #     driver: bridge
+  # volumes:
+  #   pgdata:
