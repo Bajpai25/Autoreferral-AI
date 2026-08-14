@@ -1,10 +1,45 @@
 import * as React from "react"
-
 import { cn } from "@/lib/utils"
+import { gsap } from "@/lib/gsap"
 
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+
+    const handleFocus = () => {
+      gsap.to(el, {
+        boxShadow: '0 0 0 3px rgba(0, 255, 255, 0.15), 0 0 20px rgba(0, 255, 255, 0.1)',
+        borderColor: 'rgba(0, 255, 255, 0.5)',
+        scale: 1.01,
+        duration: 0.3,
+        ease: 'power2.out',
+      })
+    }
+
+    const handleBlur = () => {
+      gsap.to(el, {
+        boxShadow: 'none',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        scale: 1,
+        duration: 0.4,
+        ease: 'power2.out',
+      })
+    }
+
+    el.addEventListener('focus', handleFocus)
+    el.addEventListener('blur', handleBlur)
+    return () => {
+      el.removeEventListener('focus', handleFocus)
+      el.removeEventListener('blur', handleBlur)
+    }
+  }, [])
+
   return (
     <input
+      ref={inputRef}
       type={type}
       data-slot="input"
       className={cn(

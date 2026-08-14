@@ -1,35 +1,99 @@
-import { useEffect, useMemo, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { SiteHeader } from '@/components/site-header'
+import { useEffect, useMemo, useState, useRef, useLayoutEffect } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { JobSidebar } from '@/components/dashboard/job-sidebar'
 import { AddJobForm } from '@/components/dashboard/add-job-form'
 import { JobCards } from '@/components/dashboard/job-cards'
 import { JobTable } from '@/components/dashboard/job-table'
-import { SettingsSheet } from '@/components/settings/settings-sheet'
 import { Button } from '@/components/ui/button'
-import { type Candidate, type Job } from '@/types'
+import { type Job } from '@/types'
 import { Plus } from 'lucide-react'
+import { getJobs, getOutreach } from '@/utils/api'
+import { TraceModal } from '@/components/dashboard/trace-modal'
+import { SiteHeader } from '@/components/site-header'
+import { Link } from 'react-router-dom'
+import { gsap, ScrollTrigger } from '@/lib/gsap'
 
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<Job[]>([])
+  const [outreach, setOutreach] = useState<any[]>([])
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null)
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
+  const mainRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
-    // hydrate with sample data on first load, then persist
-    const saved = typeof window !== 'undefined' ? window.localStorage.getItem('jobs') : null
-    if (saved) {
-      setJobs(JSON.parse(saved))
-    } else {
-      setJobs([]);
-    }
+    const handleMouseMove = (e: MouseEvent) => setMousePosition({ x: e.clientX, y: e.clientY })
+    window.addEventListener('mousemove', handleMouseMove)
+    return () => window.removeEventListener('mousemove', handleMouseMove)
   }, [])
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('jobs', JSON.stringify(jobs))
+  // GSAP entry animations
+  useLayoutEffect(() => {
+    if (!mainRef.current) return
+
+    const ctx = gsap.context(() => {
+      const tl = gsap.timeline({ defaults: { ease: 'power3.out' } })
+
+      tl.fromTo('.dash-greeting', { autoAlpha: 0, x: -30 }, { autoAlpha: 1, x: 0, duration: 0.6 })
+      tl.fromTo('.dash-subtitle', { autoAlpha: 0, x: -30 }, { autoAlpha: 1, x: 0, duration: 0.5 }, '-=0.3')
+      tl.fromTo('.dash-actions', { autoAlpha: 0, y: 15 }, { autoAlpha: 1, y: 0, duration: 0.4 }, '-=0.3')
+
+      // Panels stagger
+      tl.fromTo('.dash-panel',
+        { autoAlpha: 0, y: 30, scale: 0.97 },
+        { autoAlpha: 1, y: 0, scale: 1, stagger: 0.12, duration: 0.6 },
+        '-=0.2'
+      )
+
+      // Pipeline table ScrollTrigger
+      gsap.fromTo('.dash-pipeline',
+        { autoAlpha: 0, y: 40 },
+        {
+          autoAlpha: 1, y: 0, duration: 0.6,
+          scrollTrigger: { trigger: '.dash-pipeline', start: 'top 88%' }
+        }
+      )
+    }, mainRef.current)
+
+    return () => ctx.revert()
+  }, [])
+   
+  const getJobsList = async (userId: string) => {
+    try {
+      const data = await getJobs(userId)
+      if (Array.isArray(data)) {
+        const mappedJobs = data.map((job: any) => ({
+          id: job.id,
+          createdAt: job.createdAt,
+          url: job.jobUrl,
+          company: job.companyName || 'Unknown Company',
+          title: job.role || 'Unknown Title',
+          status: 'Active',
+          candidates: []
+        }))
+        setJobs(mappedJobs)
+      }
+    } catch (err) {
+      console.error(err)
     }
-  }, [jobs])
+  }
+
+  const getOutreachList = async (userId: string) => {
+    try {
+      const data = await getOutreach(userId)
+      if (Array.isArray(data)) setOutreach(data)
+    } catch (err) {
+      console.log(err)
+    }
+  }
+
+  useEffect(() => {
+    const userId = localStorage.getItem("userId")
+    if (userId) {
+      getJobsList(userId)
+      getOutreachList(userId)
+    }
+  }, [])
 
   const activeJob = useMemo(
     () => jobs.find((j) => j.id === activeJobId) ?? null,
@@ -50,58 +114,74 @@ export default function DashboardPage() {
     setJobs((prev) => prev.map((j) => (j.id === id ? updater(j) : j)))
   }
 
-  function addCandidate(jobId: string, candidate: Candidate) {
-    updateJob(jobId, (j) => ({
-      ...j,
-      candidates: [candidate, ...(j.candidates ?? [])],
-    }))
-  }
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('token')
+    if (token) {
+      sessionStorage.setItem('authToken', token)
+      const newUrl = window.location.pathname
+      window.history.replaceState({}, document.title, newUrl)
+      console.log("Token secured in session storage!")
+    }
+  }, [])
+
+  const hour = new Date().getHours()
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
 
   return (
-    <div className="min-h-screen bg-neutral-50">
-      <SiteHeader onOpenSettings={() => setSettingsOpen(true)} />
-      <main className="container mx-auto px-4 py-6">
-        <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">Dashboard</h1>
-          <div className="flex items-center gap-2">
-            <Button onClick={() => setActiveJobId(null)} variant="secondary" className="gap-2">
-              <Plus className="size-4" />
-              New
-            </Button>
-            <SettingsSheet open={settingsOpen} onOpenChange={setSettingsOpen} />
+    <div className="relative min-h-screen bg-[#030712] text-white font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+      <SiteHeader />
+      <div className="fixed inset-0 z-0 bg-[#000000] pointer-events-none">
+        <div className="absolute top-[-20%] left-[-10%] w-[1000px] h-[1000px] rounded-full bg-[radial-gradient(circle,rgba(0,255,255,0.06),transparent_70%)] blur-3xl opacity-50" />
+        <div className="absolute top-[20%] right-[-10%] w-[1000px] h-[1000px] rounded-full bg-[radial-gradient(circle,rgba(143,0,255,0.05),transparent_70%)] blur-3xl opacity-50" />
+        <div className="absolute bottom-[-20%] left-[20%] w-[1200px] h-[1200px] rounded-full bg-[radial-gradient(circle,rgba(0,200,255,0.04),transparent_70%)] blur-3xl opacity-50" />
+        <div 
+          className="absolute inset-0 opacity-[0.05]"
+          style={{
+            backgroundImage: `linear-gradient(to right, rgba(255,255,255,0.2) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.2) 1px, transparent 1px)`,
+            backgroundSize: '80px 80px',
+            transform: `translate(${mousePosition.x * -0.01}px, ${mousePosition.y * -0.01}px)`
+          }}
+        />
+      </div>
+
+      <main ref={mainRef} className="container mx-auto px-4 py-8 relative z-10 mt-12">
+        <div className="fixed inset-0 pointer-events-none bg-gradient-to-br from-cyan-500/10 via-transparent to-indigo-500/10 z-0"></div>
+        <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="dash-greeting gsap-reveal text-3xl md:text-4xl font-semibold tracking-tight text-white mb-2">
+              {greeting}, {localStorage.getItem("name")}
+            </h1>
+            <p className="dash-subtitle gsap-reveal text-neutral-400 text-sm">
+              Your pipeline is active. Manage processes and deploy targeted outreach agents.
+            </p>
+          </div>
+          <div className="dash-actions gsap-reveal flex items-center gap-3">
+            <Link to="/workflow-builder">
+              <Button onClick={() => setActiveJobId(null)} variant="secondary" className="gap-2 rounded-full shadow-[0_0_15px_rgba(255,255,255,0.1)]">
+                <Plus className="size-4" />
+                New Flow
+              </Button>
+            </Link>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          <motion.aside
-            layout
-            className="lg:col-span-3 rounded-xl border bg-white"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-          >
-            <JobSidebar
-              jobs={jobs}
-              activeJobId={activeJobId}
-              onSelectJob={(id) => setActiveJobId(id)}
-              onNew={() => setActiveJobId(null)}
-            />
-          </motion.aside>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 max-w-7xl mx-auto">
+          <aside className="dash-panel gsap-reveal lg:col-span-3 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-lg relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+            <JobSidebar jobs={jobs} activeJobId={activeJobId} onSelectJob={(id) => setActiveJobId(id)} onNew={() => setActiveJobId(null)} />
+          </aside>
 
-          <motion.section
-            layout
-            className="lg:col-span-6 rounded-xl border bg-white p-4 md:p-6"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.05 }}
-          >
+          <section className="dash-panel gsap-reveal lg:col-span-6 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-4 md:p-6 shadow-[0_8px_32px_rgba(0,0,0,0.5)] relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-b from-indigo-500/5 to-transparent pointer-events-none" />
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeJobId ?? 'add-job'}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.2 }}
+                initial={{ opacity: 0, scale: 0.98, filter: "blur(4px)" }}
+                animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+                exit={{ opacity: 0, scale: 0.98, filter: "blur(4px)" }}
+                transition={{ duration: 0.3 }}
+                className="relative z-10"
               >
                 <AddJobForm
                   key={activeJobId ?? 'form'}
@@ -114,62 +194,33 @@ export default function DashboardPage() {
                 />
               </motion.div>
             </AnimatePresence>
-          </motion.section>
+          </section>
 
-          <motion.section
-            layout
-            className="lg:col-span-3 space-y-6"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.1 }}
-          >
+          <section className="dash-panel gsap-reveal lg:col-span-3 space-y-6">
             <JobCards jobs={jobs} />
-            <div className="rounded-xl border bg-white p-4">
-              <h3 className="font-medium mb-3">Quick Tips</h3>
-              <ul className="list-disc pl-5 text-sm text-neutral-600 space-y-1">
-                <li>Paste a job or company URL to begin.</li>
-                <li>Upload a resume to personalize outreach.</li>
-                <li>Pick tone and target roles before sending.</li>
+            <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-5 relative overflow-hidden">
+              <div className="absolute bottom-0 right-0 w-24 h-24 bg-purple-500/10 rounded-full blur-2xl pointer-events-none" />
+              <h3 className="font-semibold mb-3 text-white flex items-center gap-2">
+                <span className="size-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(0,255,255,0.8)]" /> Quick Intel
+              </h3>
+              <ul className="list-disc pl-5 text-sm text-neutral-400 space-y-2 marker:text-cyan-500/50">
+                <li>Input a job URL to scrape candidate data automatically.</li>
+                <li>Upload target resumes to calibrate the outreach persona.</li>
+                <li>Ensure automated pipelines are actively toggled on.</li>
               </ul>
             </div>
-          </motion.section>
+          </section>
         </div>
 
-        <motion.section
-          className="mt-6 rounded-xl border bg-white p-4 md:p-6"
-          initial={{ opacity: 0, y: 16 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, amount: 0.2 }}
-          transition={{ duration: 0.4 }}
-        >
+        <section className="dash-pipeline gsap-reveal mt-8 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl p-4 md:p-6 shadow-lg max-w-7xl mx-auto">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg md:text-xl font-semibold">Add Job — Candidates</h2>
+            <h2 className="text-lg md:text-xl font-semibold">Active Outreach Pipeline</h2>
           </div>
-          <JobTable
-            candidates={
-              (activeJob?.candidates ??
-                [
-                  {
-                    id: 'c1',
-                    name: 'John Doe',
-                    company: 'Google',
-                    title: 'Software Engineer',
-                    status: 'Connection Sent',
-                  },
-                  {
-                    id: 'c2',
-                    name: 'Phya R.',
-                    company: 'Google',
-                    title: 'Frontend Engineer',
-                    status: 'Message Sent',
-                  },
-                ]) as Candidate[]
-            }
-            onViewMessage={(id) => console.log('view', id)}
-            onEdit={(id) => console.log('edit', id)}
-          />
-        </motion.section>
+          <JobTable outreach={outreach} onViewMessage={(id) => setSelectedTraceId(id)} onEdit={(id) => console.log('edit', id)} />
+        </section>
       </main>
+
+      <TraceModal isOpen={!!selectedTraceId} onClose={() => setSelectedTraceId(null)} data={outreach.find((o: any) => o.id === selectedTraceId)} />
     </div>
   )
 }

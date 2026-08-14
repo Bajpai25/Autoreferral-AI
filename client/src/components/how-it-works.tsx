@@ -1,12 +1,15 @@
-import { motion } from 'framer-motion'
+import { useRef, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ListOrdered, LinkIcon, Bot, Send } from 'lucide-react'
+import { gsap, ScrollTrigger } from '@/lib/gsap'
 
 type HowItWorksProps = {
   id?: string
 }
 
 export function HowItWorks({ id = 'how-it-works' }: HowItWorksProps) {
+  const sectionRef = useRef<HTMLElement>(null)
+
   const steps = [
     {
       icon: LinkIcon,
@@ -24,18 +27,42 @@ export function HowItWorks({ id = 'how-it-works' }: HowItWorksProps) {
       desc: 'Preview, personalize, and send in minutes.',
     },
   ]
+
+  useEffect(() => {
+    if (!sectionRef.current) return
+
+    const cards = sectionRef.current.querySelectorAll('.hiw-card')
+    const heading = sectionRef.current.querySelector('.hiw-heading')
+
+    const ctx = gsap.context(() => {
+      if (heading) {
+        gsap.fromTo(heading,
+          { autoAlpha: 0, y: 40 },
+          {
+            autoAlpha: 1, y: 0, duration: 0.7, ease: 'power3.out',
+            scrollTrigger: { trigger: heading, start: 'top 88%', toggleActions: 'play none none none' }
+          }
+        )
+      }
+
+      gsap.fromTo(cards,
+        { autoAlpha: 0, y: 50, scale: 0.92 },
+        {
+          autoAlpha: 1, y: 0, scale: 1, duration: 0.6, stagger: 0.12, ease: 'power3.out',
+          scrollTrigger: { trigger: sectionRef.current, start: 'top 80%', toggleActions: 'play none none none' }
+        }
+      )
+    }, sectionRef.current)
+
+    return () => ctx.revert()
+  }, [])
+
   return (
-    <section id={id} className="mt-12 md:mt-16">
-      <h2 className="text-2xl md:text-3xl font-semibold tracking-tight">How It Works</h2>
+    <section id={id} className="mt-12 md:mt-16" ref={sectionRef}>
+      <h2 className="hiw-heading gsap-reveal text-2xl md:text-3xl font-semibold tracking-tight">How It Works</h2>
       <div className="mt-6 grid gap-4 md:grid-cols-3">
-        {steps.map((s, i) => (
-          <motion.div
-            key={s.title}
-            initial={{ opacity: 0, y: 16 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, amount: 0.3 }}
-            transition={{ duration: 0.4, delay: i * 0.05 }}
-          >
+        {steps.map((s) => (
+          <div key={s.title} className="hiw-card gsap-reveal">
             <Card>
               <CardHeader className="flex-row items-center gap-3">
                 <div className="rounded-md border p-2">
@@ -47,7 +74,7 @@ export function HowItWorks({ id = 'how-it-works' }: HowItWorksProps) {
                 {s.desc}
               </CardContent>
             </Card>
-          </motion.div>
+          </div>
         ))}
       </div>
     </section>

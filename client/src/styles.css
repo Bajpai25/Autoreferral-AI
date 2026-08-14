@@ -1,0 +1,120 @@
+
+@layer utilities {
+  .glitch-scanline {
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .glitch-scanline::before {
+    content: " ";
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    right: 0;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+    z-index: 2;
+    background-size: 100% 2px, 3px 100%;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  
+  .glitch-scanline:hover::before {
+    opacity: 1;
+    animation: scanline 0.5s linear infinite;
+  }
+  
+  .rgb-split-hover {
+    transition: text-shadow 0.3s;
+  }
+  
+  .rgb-split-hover:hover {
+    text-shadow: -2px 0 cyan, 2px 0 red;
+  }
+  
+  .ghost-border {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .glow-active {
+    box-shadow: 0px 0px 15px rgba(0, 255, 255, 0.15);
+  }
+}
+
+/* ── GSAP Animation Classes ── */
+
+/* Initial hidden state for GSAP autoAlpha reveal pattern */
+.gsap-reveal {
+  visibility: hidden;
+}
+
+/* Word/char split containers for text animations */
+.gsap-split-word {
+  display: inline-block;
+  overflow: hidden;
+}
+
+.gsap-split-char {
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+/* Perspective container for 3D card tilt effects */
+.perspective-container {
+  perspective: 1000px;
+  transform-style: preserve-3d;
+}
+
+/* Performance: promote animated elements to GPU layer */
+.will-change-transform {
+  will-change: transform;
+}
+
+/* ── Custom Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 255, 0.2);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+}
+
+/* ── Logo Marquee ── */
+.marquee-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+}
+
+/* ── Mobile Nav Overlay ── */
+.nav-overlay {
+  clip-path: circle(0% at calc(100% - 2rem) 2rem);
+  will-change: clip-path;
+}
+
+.nav-overlay--open {
+  clip-path: circle(150% at calc(100% - 2rem) 2rem);
+}
+
+@keyframes scanline {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(2px); }
+}

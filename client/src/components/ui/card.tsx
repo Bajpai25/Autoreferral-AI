@@ -1,13 +1,17 @@
 import * as React from "react"
-
 import { cn } from "@/lib/utils"
+import { useCardTilt } from "@/lib/use-card-tilt"
 
 function Card({ className, ...props }: React.ComponentProps<"div">) {
+  const cardRef = React.useRef<HTMLDivElement>(null)
+  useCardTilt(cardRef, 8)
+
   return (
     <div
+      ref={cardRef}
       data-slot="card"
       className={cn(
-        "bg-card text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm",
+        "bg-white/5 backdrop-blur-xl border-white/10 text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-[0_4px_30px_rgba(0,0,0,0.1)] transition-colors duration-300",
         className
       )}
       {...props}
