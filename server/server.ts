@@ -2,8 +2,11 @@ import { app } from "./app";
 import dotenv from "dotenv";
 dotenv.config();
 
-const PORT=process.env.port;
+// Boot the workflow worker (starts listening for BullMQ jobs)
+import "./services/workflow.worker";
 
-app.listen((PORT || 8000),()=>{
+const PORT = process.env.PORT || 8000;
+
+app.listen(PORT, () => {
     console.log(`Server is running at port ${PORT}`);
-})
+});

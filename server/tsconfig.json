@@ -8,7 +8,12 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["./**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "./**/*.ts",
+    "worker.ts",
+    "server.cjs"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
-

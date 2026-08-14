@@ -6,7 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const app_1 = require("./app");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
-const PORT = process.env.port;
-app_1.app.listen((PORT || 8000), () => {
+// Boot the workflow worker (starts listening for BullMQ jobs)
+require("./services/workflow.worker");
+const PORT = process.env.PORT || 8000;
+app_1.app.listen(PORT, () => {
     console.log(`Server is running at port ${PORT}`);
 });

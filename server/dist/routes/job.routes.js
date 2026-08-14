@@ -1,1 +1,10 @@
 "use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const jobs_service_1 = require("../services/jobs.service");
+const router = (0, express_1.Router)();
+router.post("/scrape", jobs_service_1.scrapeJobs);
+router.post("/combine", jobs_service_1.combineData);
+router.post("/generate", jobs_service_1.linkedInMessage);
+router.post("/getJobs", jobs_service_1.getJobs);
+exports.default = router;

@@ -5,5 +5,7 @@ const user_controller_1 = require("../controllers/user.controller");
 const router = (0, express_1.Router)();
 router.post("/register", user_controller_1.register);
 router.post("/login", user_controller_1.login);
-router.post("/authenticate", user_controller_1.authenticateUser);
+router.get("/authenticate", user_controller_1.authenticateUserToken);
+router.get("/auth/linkedin/callback", user_controller_1.linkedinAuthCallback);
+router.post("/logout", user_controller_1.logoutUser);
 exports.default = router;

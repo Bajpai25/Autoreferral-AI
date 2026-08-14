@@ -1,10 +1,12 @@
 import { Router } from "express";
-import { authenticateUser, login, register } from "../controllers/user.controller";
+import { authenticateUserToken, linkedinAuthCallback, login, logoutUser, register } from "../controllers/user.controller";
 
 const router=Router();
 
 router.post("/register",register);
 router.post("/login",login);
-router.post("/authenticate",authenticateUser);
+router.get("/authenticate",authenticateUserToken);
+router.get("/auth/linkedin/callback",linkedinAuthCallback);
+router.post("/logout",logoutUser);
 
 export default router;

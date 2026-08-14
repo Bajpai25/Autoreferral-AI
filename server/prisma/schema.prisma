@@ -14,21 +14,35 @@ model User {
   email     String     @unique
   password  String
   name      String
+  linkedinLiAt         String?
+  linkedinJsessionId   String?
+  linkedinAccessToken   String?
+  linkedinCookieUpdatedAt DateTime?
   resume    Resume[]
   jobs      Job[]
   outreach  Outreach[]
+  workflows Workflow[]
+  SkillsMatcher SkillsMatcher[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 }
 
 model Job {
   id         String      @id @default(uuid())
-  title      String
-  company    String
+  rawJobdata Json
+  jobId      String?
+  title      String?
+  companyName    String?
+  role       String?
+  jobdescription String?
+  location   String?
+  experienceRequired String?
+  skills    String?
+  qualifications  String?
+  dateposted  String?
   jobUrl     String
   userId     String
   user       User        @relation(fields: [userId], references: [id])
-  employees  Employee[]
   outreach   Outreach[]
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
@@ -37,34 +51,56 @@ model Job {
 model Resume {
   id        String    @id @default(uuid())
   content   String
+  summary   String?
+  fileName  String  @unique // to uniquely identify the fileName
   userId    String
   user      User      @relation(fields: [userId], references: [id])
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 }
 
-model Employee {
-  id         String      @id @default(uuid())
-  name       String
-  title      String
-  linkedIn   String
-  jobId      String
-  job        Job         @relation(fields: [jobId], references: [id])
-  outreach   Outreach[]
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+model SkillsMatcher {
+  id                     String  @id @default(uuid())
+  matchingSkills         String
+  fitScore               String
+  alignmentSummary       String
+  referralTalkingPoints  String
+  userId                 String
+  user                   User @relation(fields:[userId] , references:[id])
+  createdAt DateTime @default(now())
 }
+ 
 
 model Outreach {
   id         String     @id @default(uuid())
   status     String
   message    String
-  employeeId String
-  employee   Employee   @relation(fields: [employeeId], references: [id])
+  messageCount Int?
   jobId      String
   job        Job        @relation(fields: [jobId], references: [id])
   userId     String
   user       User @relation(fields:[userId] , references:[id])
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
+}
+
+model Workflow {
+  id              String    @id @default(uuid())
+  name            String
+  status          String    @default("inactive")
+  cronExpression  String    @default("0 9 * * *")
+  connectionData  String[]
+  targetCompany   String
+  maxConnections  Int       @default(10)
+  connectionNote  String?
+  nodesJson       Json?
+  edgesJson       Json?
+  lastRunAt       DateTime?
+  nextRunAt       DateTime?
+  totalSent       Int       @default(0)
+  totalFailed     Int       @default(0)
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }

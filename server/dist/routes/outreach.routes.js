@@ -2,6 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const outreach_controller_1 = require("../controllers/outreach.controller");
+const user_controller_1 = require("../controllers/user.controller");
+const outreach_service_1 = require("../services/outreach.service");
 const router = (0, express_1.Router)();
-router.post("/send-referral", outreach_controller_1.sendReferral);
+router.post("/send-referral", user_controller_1.authenticateUser, outreach_controller_1.sendMessagesToCompanyEmployees);
+router.post("/getOutreach", outreach_service_1.getOutreach);
 exports.default = router;
