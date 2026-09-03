@@ -21,6 +21,15 @@ export default function DashboardPage() {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
   const mainRef = useRef<HTMLElement>(null)
 
+  // Notification popup state (shared with WorkflowBuilder)
+  const [polledResults, setPolledResults] = useState<Array<{ name: string; profileUrl?: string; status: 'sent'|'failed'; error?: string }>>([]);
+  const [noticeItem, setNoticeItem] = useState<{ name: string; profileUrl?: string; status: 'sent'|'failed'; error?: string } | null>(null);
+  const noticeQueueRef = useRef<Array<{ name: string; profileUrl?: string; status: 'sent'|'failed'; error?: string }>>([]);
+  const noticeTimerRef = useRef<number | null>(null);
+  const lastShownRef = useRef<string | null>(null);
+  const shownKeysRef = useRef<Set<string>>(new Set());
+  const [noticeVisible, setNoticeVisible] = useState(false);
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => setMousePosition({ x: e.clientX, y: e.clientY })
     window.addEventListener('mousemove', handleMouseMove)
@@ -128,6 +137,64 @@ export default function DashboardPage() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
 
+  // Poll for connection results and enqueue notifications
+  useEffect(() => {
+    let intervalId: any;
+    const fetchResults = async () => {
+      try {
+        const base = (import.meta.env.VITE_API_URL as string) || '';
+        const url = `${base.replace(/\/$/, '')}/workflows/workflow-results`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setPolledResults(data);
+          // stop polling once we have results to avoid duplicate notifications
+          if (intervalId) { clearInterval(intervalId); intervalId = null; }
+        }
+      } catch {}
+    };
+
+    fetchResults();
+    intervalId = setInterval(fetchResults, 2000);
+    return () => { if (intervalId) clearInterval(intervalId); };
+  }, []);
+
+  // audio
+  const playNotification = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.0025; o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.12);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+      setTimeout(() => { try { ctx.close(); } catch (e) {} }, 300);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (!polledResults || polledResults.length === 0) return;
+    let added = false;
+    for (let i = 0; i < polledResults.length; i++) {
+      const item = polledResults[i];
+      const key = `${item.name}-${item.status}-${item.error || ''}`;
+      if (!shownKeysRef.current.has(key)) { noticeQueueRef.current.push(item); added = true; }
+    }
+    if (added && !noticeItem) showNextNotice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polledResults]);
+
+  const clearNoticeTimer = () => { if (noticeTimerRef.current) { window.clearTimeout(noticeTimerRef.current as number); noticeTimerRef.current = null; } };
+  const showNextNotice = () => {
+    clearNoticeTimer();
+    const next = noticeQueueRef.current.shift();
+    if (!next) { setNoticeVisible(false); noticeTimerRef.current = window.setTimeout(() => setNoticeItem(null), 300); return; }
+    setNoticeItem(next); setTimeout(() => setNoticeVisible(true), 20); playNotification(); lastShownRef.current = `${next.name}-${next.status}-${next.error || ''}`; shownKeysRef.current.add(lastShownRef.current);
+    noticeTimerRef.current = window.setTimeout(() => { setNoticeVisible(false); noticeTimerRef.current = window.setTimeout(() => { setNoticeItem(null); showNextNotice(); }, 500); }, 5000);
+  };
+
+  useEffect(() => () => { clearNoticeTimer(); }, []);
+
   return (
     <div className="relative min-h-screen bg-[#030712] text-white font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
       <SiteHeader />
@@ -146,6 +213,24 @@ export default function DashboardPage() {
       </div>
 
       <main ref={mainRef} className="container mx-auto px-4 py-8 relative z-10 mt-12">
+        {/* Notification Toast (bottom popups) */}
+        {noticeItem && (
+          <div
+            className={`wf-notice-toast ${noticeVisible ? 'wf-notice-toast--visible' : ''} ${
+              noticeItem.status === 'failed' ? 'wf-notice-toast--error' : ''
+            }`}
+          >
+            <div className="wf-notice-toast__icon">
+              {noticeItem.status === 'sent' ? '✓' : '✕'}
+            </div>
+            <div className="wf-notice-toast__content">
+              <div className="wf-notice-toast__name">{noticeItem.name}</div>
+              <div className="wf-notice-toast__status">
+                {noticeItem.status === 'sent' ? 'Connection request sent' : (noticeItem.error || 'Failed to send')}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="fixed inset-0 pointer-events-none bg-gradient-to-br from-cyan-500/10 via-transparent to-indigo-500/10 z-0"></div>
         <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>

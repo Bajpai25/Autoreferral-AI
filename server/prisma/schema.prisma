@@ -87,6 +87,7 @@ model Outreach {
 model Workflow {
   id              String    @id @default(uuid())
   name            String
+ outReachFlag     Boolean  @default(false)
   status          String    @default("inactive")
   cronExpression  String    @default("0 9 * * *")
   connectionData  String[]

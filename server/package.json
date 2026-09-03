@@ -28,7 +28,8 @@
     "nodemailer": "^9.0.3",
     "pdf-parse-fork": "^1.2.0",
     "pdfreader": "^3.0.8",
-    "playwright": "^1.54.2"
+    "playwright": "^1.54.2",
+    "undici": "^8.10.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

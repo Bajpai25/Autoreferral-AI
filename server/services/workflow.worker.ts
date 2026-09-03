@@ -1,6 +1,7 @@
 import { Worker, Job, type ConnectionOptions } from "bullmq";
 import { executeWorkflow } from "./workflow.service";
 import { prisma } from "../utils/constant";
+import {sendMessagesToCompanyEmployees} from "../controllers/outreach.controller";
 
 const connection: ConnectionOptions = {
   host: "localhost",

@@ -35,6 +35,15 @@ console.log("Saved Workflows:", savedWorkflows);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const savedRef = useRef<HTMLDivElement>(null);
+  const [deployedWorkflowId, setDeployedWorkflowId] = useState<string | null>(null);
+  const [polledResults, setPolledResults] = useState<Array<{ name: string; profileUrl?: string; status: 'sent'|'failed'; error?: string }>>([]);
+  // notification queue for popup cards
+  const [noticeItem, setNoticeItem] = useState<{ name: string; profileUrl?: string; status: 'sent'|'failed'; error?: string } | null>(null);
+  const noticeQueueRef = useRef<Array<{ name: string; profileUrl?: string; status: 'sent'|'failed'; error?: string }>>([]);
+  const noticeTimerRef = useRef<number | null>(null);
+  const lastShownRef = useRef<string | null>(null);
+  const shownKeysRef = useRef<Set<string>>(new Set());
+  const [noticeVisible, setNoticeVisible] = useState(false);
 
   const nodeTypes = useMemo(() => ({
     trigger: TriggerNode,
@@ -138,7 +147,7 @@ console.log("Saved Workflows:", savedWorkflows);
 
     setIsDeploying(true);
     try {
-      await createAndTriggerWorkflow({
+      const created = await createAndTriggerWorkflow({
         name: workflowName || 'Untitled Workflow',
         targetCompany,
         cronExpression: (triggerNode.data.cron as string) || '0 9 * * *',
@@ -147,6 +156,10 @@ console.log("Saved Workflows:", savedWorkflows);
         nodesJson: nodes,
         edgesJson: edges,
       });
+
+      // capture created workflow id to start polling
+      const wid = created?.id || created?.workflowId || null;
+      if (wid) setDeployedWorkflowId(String(wid));
 
       alert('✅ Workflow deployed and running!');
     } catch (err: any) {
@@ -157,12 +170,145 @@ console.log("Saved Workflows:", savedWorkflows);
     }
   };
 
-  console.log(userWorkflows);
+  // Polling for connection results every 2s when a workflow is deployed/selected
+  useEffect(() => {
+    let intervalId: any;
+    const wid = deployedWorkflowId || activeWorkflowId;
+    if (!wid) return;
+
+    const fetchResults = async () => {
+      try {
+        const base = (import.meta.env.VITE_API_URL as string) || '';
+        const url = `${base.replace(/\/$/, '')}/workflows/workflow-results?workflowId=${encodeURIComponent(wid)}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+            if (Array.isArray(data)) {
+              console.debug('[poll] got', data.length, 'results');
+              setPolledResults(data);
+            }
+      } catch (e) {
+        // ignore network errors for polling
+      }
+    };
+
+    // initial fetch then interval
+    fetchResults();
+    intervalId = setInterval(fetchResults, 2000);
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [deployedWorkflowId, activeWorkflowId]);
+
+  // play a short notification beep using Web Audio API (no external file)
+  const playNotification = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 880; // A6
+      g.gain.value = 0.0025;
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + 0.12);
+      // ramp down quickly
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+      // close context shortly after
+      setTimeout(() => { try { ctx.close(); } catch (e) {} }, 300);
+    } catch (e) {
+      // fallback: no-op
+    }
+  };
+
+  // When polledResults updates, enqueue newest unseen result to show as popup
+  useEffect(() => {
+    if (!polledResults || polledResults.length === 0) return;
+    // Enqueue any items that haven't been shown yet (handles batches)
+    let added = false;
+    for (let i = 0; i < polledResults.length; i++) {
+      const item = polledResults[i];
+      const key = `${item.name}-${item.status}-${item.error || ''}`;
+      if (!shownKeysRef.current.has(key)) {
+        console.debug('[notify] enqueue', key);
+        noticeQueueRef.current.push(item);
+        added = true;
+      }
+    }
+    if (added && !noticeItem) showNextNotice();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polledResults]);
+
+  const clearNoticeTimer = () => {
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current as number);
+      noticeTimerRef.current = null;
+    }
+  };
+
+  const showNextNotice = () => {
+    clearNoticeTimer();
+    const next = noticeQueueRef.current.shift();
+    if (!next) {
+      setNoticeVisible(false);
+      // ensure unmounted after short delay
+      noticeTimerRef.current = window.setTimeout(() => setNoticeItem(null), 300);
+      return;
+    }
+    setNoticeItem(next);
+    // small delay to allow mount -> then mark visible for CSS enter
+    setTimeout(() => setNoticeVisible(true), 20);
+    playNotification();
+    lastShownRef.current = `${next.name}-${next.status}-${next.error || ''}`;
+    shownKeysRef.current.add(lastShownRef.current);
+    console.debug('[notify] showNext', lastShownRef.current);
+    // show for 3s then hide (start exit) then unmount and show next
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNoticeVisible(false);
+      noticeTimerRef.current = window.setTimeout(() => {
+        setNoticeItem(null);
+        showNextNotice();
+      }, 500);
+    }, 5000);
+  };
+
+  // cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      clearNoticeTimer();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  console.log(noticeItem)
  
 
   return (
     <div className="wf-page">
       <SiteHeader />
+       {/* ─── Notification Toast ─── */}
+      {noticeItem && (
+        <div
+          className={`wf-notice-toast ${noticeVisible ? 'wf-notice-toast--visible' : ''} ${
+            noticeItem.status === 'failed' ? 'wf-notice-toast--error' : ''
+          }`}
+        >
+          <div className="wf-notice-toast__icon">
+            {noticeItem.status === 'sent' ? '✓' : '✕'}
+          </div>
+          <div className="wf-notice-toast__content">
+            <div className="wf-notice-toast__name">{noticeItem.name}</div>
+            <div className="wf-notice-toast__status">
+              {noticeItem.status === 'sent'
+                ? 'Connection request sent'
+                : (noticeItem.error || 'Failed to send')}
+            </div>
+          </div>
+        </div>
+      )}
+  
 
       <div className="wf-shell">
         {/* Mobile overlay */}
@@ -237,6 +383,18 @@ console.log("Saved Workflows:", savedWorkflows);
               <span className="wf-toolbar__btn-text">{isDeploying ? 'Deploying…' : 'Start'}</span>
             </button>
 
+            {/* Dev: test notice */}
+            <button
+              className="wf-toolbar__btn"
+              onClick={() => {
+                const sample = { name: 'Test User', status: 'sent' as const };
+                noticeQueueRef.current.push(sample);
+                if (!noticeItem) showNextNotice();
+              }}
+            >
+              Test Notice
+            </button>
+
             {/* Saved Workflows button */}
             <div ref={savedRef} style={{ position: 'relative' }}>
               <button
@@ -300,6 +458,9 @@ console.log("Saved Workflows:", savedWorkflows);
           </div>
         </div>
  
+       
+       
+
         {/* React Flow Canvas */}
         <ReactFlowProvider>
           <ReactFlow

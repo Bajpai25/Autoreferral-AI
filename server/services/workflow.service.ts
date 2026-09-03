@@ -1,688 +1,444 @@
-import { Page, BrowserContext } from "playwright";
+import { Page } from "playwright";
 import { prisma } from "../utils/constant";
 import { closeSession, getOrCreateSession } from "./session-manager";
+import { searchAndMessageEmployees } from "./outreach.service";
 import nodemailer from "nodemailer";
-// import {  workflowQueue } from "./workflow.producer";
 
 // ─── Types ───
-
 export interface ConnectionResult {
   name: string;
-  profileUrl: string;
-  status: "sent" | "failed";
-  error?: string;
-}
-interface ConnectionDetails {
-  name: string;
-  profileUrl: string;
+  profileUrl?: string;
   status: "sent" | "failed";
   error?: string;
 }
 
 interface ProfileCard {
   name: string;
-  profileUrl: string;
-  cardIndex: number;
+  profileUrl?: string;
+  cardIndex: number; // 0-based index among listitems on that page
 }
 
+// Send connection result to backend API so frontend can poll it.
+export async function sendConnectionResult(result: ConnectionResult, workflowId?: string) {
+  const base = process.env.API_BASE || "http://localhost:8000";
+  const url = `${base.replace(/\/$/, "")}/api/workflows/workflow-results`;
 
-// TODO: Move credentials to env vars (SMTP_USER, SMTP_PASS)
+  try {
+    if (typeof fetch === "undefined") {
+      try {
+        const undici = await import("undici");
+        // @ts-ignore
+        (global as any).fetch = undici.fetch;
+      } catch {}
+    }
+
+    const payload = { workflowId, ...result };
+    console.log("→ sendConnectionResult POST to", url, payload.name);
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      keepalive: true as any,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.error("⚠️  sendConnectionResult failed:", res.status, text);
+    }
+  } catch (err) {
+    console.error("⚠️  Failed to send connection result to API:", err);
+  }
+}
+
+// SMTP transporter (keep minimal)
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
   secure: false,
   auth: {
-    user: process.env.SMTP_USER || "Shashwat252003",
-    pass: process.env.SMTP_PASS || "Bajpai123",
+    user: process.env.SMTP_USER || "",
+    pass: process.env.SMTP_PASS || "",
   },
 });
-transporter.verify().then(()=>{
-  console.log("SMTP transporter verified successfully.");
-}).catch((err)=>{
-  console.error("SMTP transporter verification failed:", err);
-})
+transporter.verify().then(() => console.log("SMTP verified")).catch(() => {});
 
-// ─── Helper: Dismiss popups ───
-
+// Dismiss common LinkedIn popups
 async function dismissPopups(page: Page): Promise<void> {
-  const dismissSelectors = [
-    'button[data-test-modal-close-btn]',
-    'button.artdeco-modal__dismiss',
-    'button[aria-label="Dismiss"]',
-    'button:has-text("Not now")',
-    'button:has-text("Got it")',
-    'button:has-text("Skip")',
-    'button[action-type="ACCEPT"]',
+  // List of popup dismiss strategies, tried in order
+  const dismissStrategies: { name: string; selector: string }[] = [
+    // "Discard" confirmation when leaving an unsent message
+    { name: 'Discard dialog', selector: 'button[data-test-dialog-primary-btn]' },
+    { name: 'Discard button', selector: 'button.artdeco-modal__confirm-dialog-btn' },
+    { name: 'Discard text btn', selector: 'button:has-text("Discard")' },
+
+    // Premium upsell modals
+    { name: 'Premium dismiss', selector: 'button[data-test-modal-close-btn]' },
+    { name: 'Premium X', selector: '.premium-upsell-link--dismiss' },
+    { name: 'Prem modal close', selector: 'button.artdeco-modal__dismiss' },
+
+    // Generic modal/dialog dismiss buttons
+    { name: 'Modal dismiss', selector: 'button.artdeco-modal__dismiss' },
+    { name: 'Modal close icon', selector: 'button.artdeco-button--circle.artdeco-modal__dismiss' },
+    { name: 'Toast close', selector: 'button.artdeco-toast-item__dismiss' },
+
+    // "Not now" / "Got it" / "Skip" generic dismissals
+    { name: 'Not now', selector: 'button:has-text("Not now")' },
+    { name: 'Got it', selector: 'button:has-text("Got it")' },
+    { name: 'Skip', selector: 'button:has-text("Skip")' },
+    { name: 'Dismiss', selector: 'button:has-text("Dismiss")' },
+    { name: 'No thanks', selector: 'button:has-text("No thanks")' },
+
+    // Cookie consent
+    { name: 'Cookie accept', selector: 'button[action-type="ACCEPT"]' },
+
+    // Message overlay "X" close buttons (stray ones)
+    { name: 'Msg overlay close', selector: 'button.msg-overlay-bubble-header__control--close-btn' },
   ];
 
+  // Run up to 3 rounds to handle chained popups
   for (let round = 0; round < 3; round++) {
     let dismissed = false;
-    for (const selector of dismissSelectors) {
+    for (const strategy of dismissStrategies) {
       try {
-        const el = await page.$(selector);
+        const el = await page.$(strategy.selector);
         if (el && (await el.isVisible())) {
           await el.click();
-          console.log(`  🚫 Dismissed popup: ${selector.slice(0, 40)}`);
-          await page.waitForTimeout(100);
+          console.log(`  🚫 Dismissed popup: ${strategy.name}`);
+          await page.waitForTimeout(3000);
           dismissed = true;
-          break;
+          break; // Restart from top to catch chained popups
         }
-      } catch {}
-    }
-    if (!dismissed) break;
-  }
-}
-
-
-
-// ─── Helper: Scroll to load all search results ───
-
-async function scrollToLoadAllResults(page: Page): Promise<string> {
-  console.log("📜 Scrolling to load all search results...");
-
-  let previousCount = 0;
-  let stableRounds = 0;
-  const MAX_STABLE = 3;
-  const SCROLL_PX = 600;
-  let attempts = 0;
-  const MAX_ATTEMPTS = 5;
-
-  try {
-    await page.waitForSelector('div[role="listitem"]', { timeout: 1000 });
-  } catch {
-    console.log("⚠️  No search results found on page");
-    return "Please go to the connections workflow in order to have better chances of getting a referral.";
-  }
-
-  while (attempts < MAX_ATTEMPTS) {
-    attempts++;
-    await page.mouse.wheel(0, SCROLL_PX);
-    await page.waitForTimeout(300);
-
-    const count = await page.evaluate(
-      () => document.querySelectorAll('div[role="listitem"]').length
-    );
-
-    if (count > previousCount) {
-      previousCount = count;
-      stableRounds = 0;
-    } else {
-      stableRounds++;
-      if (stableRounds >= MAX_STABLE) break;
-    }
-  }
-
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(200);
-
-  console.log(`📜 Total cards discovered: ${previousCount}`);
-  
-  return `This is the profiles received as your connections: ${previousCount}`;
-}
-
-// ─── Helper: Extract profiles with Connect button (2nd/3rd degree) ───
-// IMPORTANT: LinkedIn's Connect buttons are <a> tags, NOT <button> tags.
-// Each <a> has aria-label="Invite {Name} to connect".
-
-async function extractConnectableProfiles(page: Page): Promise<ProfileCard[]> {
-  return page.evaluate(() => {
-    const results: { name: string; profileUrl: string; cardIndex: number }[] = [];
-    const cards = document.querySelectorAll('div[role="listitem"]');
-
-    cards.forEach((card, index) => {
-      // LinkedIn uses <a> tags (not <button>) for the Connect action
-      const connectBtn =
-        card.querySelector('a[aria-label*="Invite"][aria-label*="to connect"]') ||
-        card.querySelector('a[aria-label*="connect"]');
-      if (!connectBtn) return;
-
-      // Check if already disabled (pending invite)
-      if (connectBtn.getAttribute("aria-disabled") === "true") return;
-
-      let name = "";
-      let profileUrl = "";
-
-      // The first <a href="/in/..."> in the card is the profile link
-      const profileLink = card.querySelector('a[href*="/in/"]') as HTMLAnchorElement | null;
-      if (profileLink) {
-        profileUrl = profileLink.getAttribute("href") || "";
-        // Get the text content but clean it up
-        const nameEl = profileLink.querySelector("a.dea7061d") || profileLink;
-        name = nameEl.textContent?.trim() || "";
+      } catch {
+        // Selector not found or not clickable — move on
       }
-
-      // Clean up name: remove degree indicators, verified badges, whitespace
-      name = name
-        .replace(/\s*•\s*(1st|2nd|3rd)\s*/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      // Remove trailing "Verified" text if present
-      name = name.replace(/\s*Verified\s*$/, "").trim();
-
-      results.push({
-        name: name || `Profile #${index + 1}`,
-        profileUrl,
-        cardIndex: index,
-      });
-    });
-
-    return results;
-  });
+    }
+    if (!dismissed) break; // No more popups
+  }
 }
 
-// ─── Helper: Click Connect button on a specific card ───
-// Uses <a> tag selector matching LinkedIn's actual HTML structure.
+// Scroll page until results stabilize and return count as number
+async function scrollToLoadAllResults(page: Page): Promise<number> {
+  const SCROLL_PX = 600;
+  const MAX_STABLE = 3;
+  const MAX_ROUNDS = 10;
+  let prev = 0;
+  let stable = 0;
+  let rounds = 0;
 
-async function clickConnectOnCard(
-  page: Page,
-  cardIndex: number
-): Promise<boolean> {
   try {
-    const cards = await page.$$('div[role="listitem"]');
-    if (cardIndex >= cards.length) return false;
+    await page.waitForSelector('div[role="listitem"]', { timeout: 2000 });
+  } catch {
+    return 0;
+  }
 
-    const card = cards[cardIndex];
-    await card.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(150);
+  while (rounds < MAX_ROUNDS && stable < MAX_STABLE) {
+    rounds++;
+    await page.mouse.wheel(0, SCROLL_PX);
+    await page.waitForTimeout(300 + Math.random() * 200);
+    const count = await page.evaluate(() => document.querySelectorAll('div[role="listitem"]').length);
+    if (count > prev) {
+      prev = count;
+      stable = 0;
+    } else {
+      stable++;
+    }
+  }
 
-    // LinkedIn Connect buttons are <a> tags with aria-label="Invite {Name} to connect"
-    const connectBtn =
-      (await card.$('a[aria-label*="Invite"][aria-label*="to connect"]')) ||
-      (await card.$('a[aria-label*="connect"]'));
+  // bring viewport to top
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(150);
+  return prev;
+}
 
-    if (!connectBtn) {
-      console.log("  ⚠️  No Connect button found on this card");
-      return false;
+// Extract connectable profile cards on page
+async function extractConnectableProfiles(page: Page): Promise<ProfileCard[]> {
+  const cards = await page.$$('div[role="listitem"]');
+  const results: ProfileCard[] = [];
+
+  for (let i = 0; i < cards.length; i++) {
+    try {
+      const card = cards[i];
+      
+      const anchor = await card.$('a[href*="/in/"]');
+      
+      const profileUrl = anchor ? (await anchor.getAttribute('href')) || undefined : undefined;
+      const name =  profileUrl?profileUrl.split("/in/")[1].replace(/\/$/, ''):`Person-${i+1}`; 
+      console.log(name , "this is the name");
+
+      // find connect button inside the card
+      const connectBtn = await card.$('a[aria-label*="Invite"][aria-label*="connect"]') || await card.$('button:has-text("Connect")');
+      if (!connectBtn) continue;
+
+      // check disabled state
+      const disabled = await connectBtn.getAttribute('aria-disabled');
+      if (disabled === 'true') continue;
+
+      results.push({ name, profileUrl, cardIndex: i });
+    } catch (err) {
+      // ignore and continue
+    }
+  }
+
+  return results;
+}
+
+// Click Connect button on nth card
+async function clickConnectOnCard(page: Page, cardIndex: number): Promise<boolean> {
+  try {
+    const locator = page.locator('div[role="listitem"]').nth(cardIndex);
+    // try invite anchor first
+    const inviteLocator = locator.locator('a[aria-label*="Invite"][aria-label*="connect"]');
+    if (await inviteLocator.count() > 0) {
+      try {
+        console.log(`  ℹ️  Clicking Invite anchor on card ${cardIndex}`);
+        await inviteLocator.first().click({ timeout: 2000 });
+        await page.waitForTimeout(300);
+        return true;
+      } catch (err) {
+        console.warn('  ⚠️  Invite anchor click failed', err);
+      }
     }
 
-    // Check if disabled
-    const isDisabled = await connectBtn.getAttribute("aria-disabled");
-    if (isDisabled === "true") {
-      console.log("  ⚠️  Connect button is disabled (already invited?)");
-      return false;
+    // fallback: any button with text Connect inside card
+    const btn2 = locator.locator('button:has-text("Connect")');
+    if (await btn2.count() > 0) {
+      try {
+        console.log(`  ℹ️  Clicking Connect button on card ${cardIndex}`);
+        await btn2.first().click({ timeout: 2000 });
+        await page.waitForTimeout(300);
+        return true;
+      } catch (err) {
+        console.warn('  ⚠️  Connect button click failed', err);
+      }
     }
 
-    await connectBtn.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(100);
-    await connectBtn.click();
-    return true;
+    console.log(`  ⚠️  No clickable Connect found on card ${cardIndex}`);
+    return false;
   } catch (err) {
-    console.error("  ❌ Error clicking Connect:", err);
     return false;
   }
 }
 
-// ─── Helper: Handle the "Add a note" dialog after clicking Connect ───
-// LinkedIn shows: "Add a note to your invitation?" with two buttons:
-//   - "Add a note"
-//   - "Send without a note"
-// We click "Send without a note" by default, unless a connectionNote is configured.
-
-async function handleConnectDialog(
-  page: Page,
-  connectionNote: string | null,
-  personName: string
-): Promise<boolean> {
-  // Wait for the dialog to appear
-  await page.waitForTimeout(500);
+// Handle the Connect modal/dialog: fill note if provided or send without note
+async function handleConnectDialog(page: Page, connectionNote: string | null, personName: string): Promise<boolean> {
+  // small delay for dialog to appear
+  await page.waitForTimeout(400);
 
   try {
-    // Check if a dialog/modal appeared
-    // LinkedIn uses role="dialog" or a modal overlay
-    const dialogSelectors = [
-      'div[role="dialog"]',
-      'div.artdeco-modal',
-      'div[data-test-modal]',
-    ];
+    // if dialog not present, assume sent
+    const dialog = await page.$('div[role="dialog"]') || await page.$('div.artdeco-modal');
+    if (!dialog) return true;
 
-    let dialogVisible = false;
-    for (const sel of dialogSelectors) {
-      try {
-        const dialog = await page.$(sel);
-        if (dialog && (await dialog.isVisible())) {
-          dialogVisible = true;
-          break;
+    if (connectionNote && connectionNote.trim()) {
+      const addNote = await dialog.$('button:has-text("Add a note")');
+      if (addNote && (await addNote.isVisible())) {
+        await addNote.click();
+        await page.waitForTimeout(250);
+        const textarea = await dialog.$('textarea') || await page.$('textarea[name="message"]');
+        if (textarea) {
+          const firstName = personName.split(' ')[0] || 'there';
+          const note = connectionNote.replace(/<FirstName>/g, firstName).replace(/<Name>/g, personName).slice(0, 300);
+          await textarea.click();
+          await textarea.fill('');
+          await page.keyboard.type(note, { delay: 5 });
         }
-      } catch {}
+
+        const sendBtn = await dialog.$('button:has-text("Send")') || await dialog.$('button[aria-label*="Send"]');
+        if (sendBtn) {
+          await sendBtn.click();
+          await page.waitForTimeout(250);
+          return true;
+        }
+      }
     }
 
-    if (!dialogVisible) {
-      // No dialog — connection request might have been sent directly
-      // Also check if the button text changed to "Pending"
-      console.log("  ✅ Connection sent directly (no dialog appeared)");
+    // send without note
+    const sendWithout = await dialog.$('button:has-text("Send without a note")') || await dialog.$('button:has-text("Send")');
+    if (sendWithout) {
+      await sendWithout.click();
+      await page.waitForTimeout(250);
       return true;
     }
 
-    // Dialog is visible — handle it
-    if (connectionNote && connectionNote.trim()) {
-      // User configured a note — click "Add a note" then type it
-      const addNoteBtn = await page.$('button:has-text("Add a note")');
-      if (addNoteBtn && (await addNoteBtn.isVisible())) {
-        await addNoteBtn.click();
-        await page.waitForTimeout(300);
-
-        // Find the note textarea
-        const noteInput =
-          (await page.$('textarea[name="message"]')) ||
-          (await page.$('textarea#custom-message')) ||
-          (await page.$("textarea"));
-
-        if (noteInput) {
-          const firstName = personName.split(" ")[0] || "there";
-          const personalizedNote = connectionNote
-            .replace(/<FirstName>/g, firstName)
-            .replace(/<Name>/g, personName)
-            .slice(0, 300); // LinkedIn limit
-
-          await noteInput.click();
-          await noteInput.fill(""); // Clear any existing text
-          await page.keyboard.type(personalizedNote, { delay: 5 });
-          console.log(`  ✏️  Added connection note (${personalizedNote.length} chars)`);
-        }
-
-        // Now click "Send" / "Send invitation"
-        const sendBtnSelectors = [
-          'button[aria-label="Send invitation"]',
-          'button[aria-label="Send now"]',
-          'button:has-text("Send")',
-        ];
-
-        for (const sel of sendBtnSelectors) {
-          try {
-            const btn = await page.$(sel);
-            if (btn && (await btn.isVisible())) {
-              await btn.click();
-              console.log("  ✅ Sent invitation with note");
-              await page.waitForTimeout(200);
-              return true;
-            }
-          } catch {}
-        }
-      }
-    }
-
-    // No note configured OR "Add a note" button not found
-    // → Click "Send without a note"
-    const sendWithoutNoteSelectors = [
-      'button[aria-label="Send without a note"]',
-      'button:has-text("Send without a note")',
-    ];
-
-    for (const sel of sendWithoutNoteSelectors) {
-      try {
-        const btn = await page.$(sel);
-        if (btn && (await btn.isVisible())) {
-          await btn.click();
-          console.log("  ✅ Sent invitation without note");
-          await page.waitForTimeout(200);
-          return true;
-        }
-      } catch {}
-    }
-
-    // Fallback: try any Send button
-    const fallbackSendSelectors = [
-      'button[aria-label="Send invitation"]',
-      'button[aria-label="Send now"]',
-      'button:has-text("Send")',
-    ];
-
-    for (const sel of fallbackSendSelectors) {
-      try {
-        const btn = await page.$(sel);
-        if (btn && (await btn.isVisible())) {
-          await btn.click();
-          console.log("  ✅ Clicked fallback Send button");
-          await page.waitForTimeout(200);
-          return true;
-        }
-      } catch {}
-    }
-
-    // Last resort: close the dialog so we don't get stuck
-    console.log("  ⚠️  Could not find Send button, dismissing dialog");
-    const dismissBtn = await page.$('button[aria-label="Dismiss"]');
-    if (dismissBtn && (await dismissBtn.isVisible())) {
-      await dismissBtn.click();
-      await page.waitForTimeout(200);
-    }
-
-    return false;
+    return true;
   } catch (err) {
-    console.error("  ❌ Error handling connect dialog:", err);
-
-    // Try to dismiss any stuck dialog
-    try {
-      const dismissBtn = await page.$('button[aria-label="Dismiss"]');
-      if (dismissBtn && (await dismissBtn.isVisible())) {
-        await dismissBtn.click();
-      }
-    } catch {}
-
     return false;
   }
 }
 
-// ─── Helper: Handle pagination and load next page ───
+// fallback: click Next button on current page
 async function loadNextPage(page: Page): Promise<boolean> {
   try {
-    // Look for the "Next" button on LinkedIn search results
-    const nextBtnSelectors = [
-      'button[aria-label="View next page"]',
-      'button:has-text("Next")',
-      'a[aria-label="Next"]',
-      'li button[aria-label*="next"]',
-    ];
-
-    for (const selector of nextBtnSelectors) {
-      try {
-        const nextBtn = await page.$(selector);
-        if (nextBtn && (await nextBtn.isVisible())) {
-          const isDisabled = await nextBtn.getAttribute("aria-disabled");
-          if (isDisabled !== "true") {
-            await nextBtn.click();
-            console.log("  📄 Navigated to next page");
-            await page.waitForTimeout(1500); // Wait for page load
-            await page.waitForSelector('div[role="listitem"]', { timeout: 10000 });
-            return true;
-          }
-        }
-      } catch {}
-    }
-
-    console.log("  ⚠️  No more pages available or Next button not found");
-    return false;
-  } catch (err) {
-    console.error("  ❌ Error loading next page:", err);
+    const nextBtn = await page.$('button[aria-label="Next"]') || await page.$('button:has-text("Next")');
+    if (!nextBtn) return false;
+    await nextBtn.click();
+    await page.waitForTimeout(800);
+    await page.waitForSelector('div[role="listitem"]', { timeout: 5000 }).catch(() => {});
+    return true;
+  } catch {
     return false;
   }
 }
 
-// ─── Main: Execute a workflow ───
+// Main executor
+export async function executeWorkflow(workflowId: string): Promise<{ totalFound: number; results: ConnectionResult[] }> {
+  console.log(`\nExecuting workflow ${workflowId}`);
 
-export async function executeWorkflow(workflowId: string): Promise<{
-  totalFound: number;
-  results: ConnectionResult[];
-}> {
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`🚀 Executing workflow: ${workflowId}`);
-  console.log(`${"=".repeat(60)}`);
+  const workflow = await prisma.workflow.findUnique({ where: { id: workflowId }, include: { user: true } });
+  if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+  if (!workflow.user) throw new Error(`Workflow user missing`);
 
-  // 1. Fetch workflow + user data from DB
-  const workflow = await prisma.workflow.findUnique({
-    where: { id: workflowId },
-    include: { user: true },
-  });
-
-  if (!workflow) {
-    throw new Error(`Workflow ${workflowId} not found`);
-  }
-
+  // ensure LinkedIn cookies exist
   if (!workflow.user.linkedinLiAt || !workflow.user.linkedinJsessionId) {
-    throw new Error(
-      `User ${workflow.userId} has no LinkedIn session cookies. Please re-authenticate via LinkedIn OAuth.`
-    );
+    throw new Error(`User ${workflow.userId} missing LinkedIn session cookies`);
   }
 
-  // 2. Update status to running
-  await prisma.workflow.update({
-    where: { id: workflowId },
-    data: { status: "running" },
-  });
+  await prisma.workflow.update({ where: { id: workflowId }, data: { status: 'running' } }).catch(() => {});
 
-  // 3. Get or create browser session (reuses existing browser)
-  const session = await getOrCreateSession(
-    workflow.userId,
-    workflow.user.linkedinLiAt,
-    workflow.user.linkedinJsessionId
-  );
-
-  // 4. Open a NEW TAB in the existing browser context (not a new browser)
+  const session = await getOrCreateSession(workflow.userId, workflow.user.linkedinLiAt, workflow.user.linkedinJsessionId);
   const page = await session.context.newPage();
+
   const results: ConnectionResult[] = [];
-  let allProfiles: ProfileCard[] = [];
   let currentPage = 1;
-  const MAX_PAGES = 10; // Prevent infinite loops
+  const MAX_PAGES = 12;
 
   try {
-    // 5. Search for people at target company (2nd & 3rd degree connections only)
-    const searchUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(
-      workflow.targetCompany
-    )}&origin=FACETED_SEARCH&network=%5B%22S%22%2C%22O%22%5D`;
+    const searchUrlBase = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(workflow.targetCompany)}&origin=FACETED_SEARCH&network=%5B%22S%22%2C%22O%22%5D`;
 
-    console.log(`🔍 Searching: ${searchUrl}`);
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-    // Wait for results
-    try {
-      await page.waitForSelector('div[role="listitem"]', { timeout: 15000 });
-      console.log("✅ Search results loaded");
-    } catch {
-      console.log("⚠️  No search results appeared within 15s");
-      return { totalFound: 0, results: [] };
+    // If this workflow has an associated outreach/message template id, delegate to outreach service
+    const outreachMessageId = (workflow as any).messageId || (workflow as any).outreachId || (workflow as any).outreachMessageId || null;
+    if (outreachMessageId) {
+      console.log(`Detected outreach messageId ${outreachMessageId} on workflow ${workflowId} — delegating to outreach service`);
+      try {
+        // reuse same session/page
+        const outreachResult = await searchAndMessageEmployees(page, workflow.targetCompany || '', '', String(outreachMessageId), workflow.maxConnections || 30, 1500, 12);
+        // searchAndMessageEmployees calls sendConnectionResult for each sent message
+        const sent = outreachResult.results.filter(r => r.status === 'sent').length;
+        const failed = outreachResult.results.filter(r => r.status === 'failed').length;
+        await prisma.workflow.update({ where: { id: workflowId }, data: { totalSent: { increment: sent }, totalFailed: { increment: failed }, lastRunAt: new Date(), status: 'active', connectionData: outreachResult.results.map(r => JSON.stringify(r)) } }).catch(() => {});
+        return { totalFound: outreachResult.totalFound, results: outreachResult.results.map(r => ({ name: r.name, profileUrl: r.profileUrl, status: r.status as "sent" | "failed", error: r.error })) };
+      } catch (e) {
+        console.error('Outreach delegation failed', e);
+        await prisma.workflow.update({ where: { id: workflowId }, data: { status: 'failed' } }).catch(() => {});
+        throw e;
+      }
     }
+    await page.goto(searchUrlBase, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForSelector('div[role="listitem"]', { timeout: 15000 }).catch(() => {});
 
-    // 6. Loop through pages until we have enough profiles or reach max pages
-    while (allProfiles.length < workflow.maxConnections && currentPage <= MAX_PAGES) {
-      console.log(`\n📖 Processing page ${currentPage}...`);
-
-      // Dismiss any popups
+    while (results.filter(r => r.status === 'sent').length < workflow.maxConnections && currentPage <= MAX_PAGES) {
+      console.log(`Processing page ${currentPage}`);
       await dismissPopups(page);
-
-      // Scroll to load all results on current page
-      const real_profiles=await scrollToLoadAllResults(page);
-
-      if(Number(real_profiles) < workflow.maxConnections){
-             // if this is happening then go to the next page of that same person and get the profiles from there and come back here again 
-             // click on next button displayed at the page bottom
-        
-      }
-      
-
-      // Extract profiles with Connect button
+      await scrollToLoadAllResults(page);
       const pageProfiles = await extractConnectableProfiles(page);
+      console.log(`Found ${pageProfiles.length} profiles on page ${currentPage}`);
 
-      if (pageProfiles.length === 0) {
-        console.log("⚠️  No connectable profiles found on this page");
-        break;
+      for (const p of pageProfiles) {
+        if (results.filter(r => r.status === 'sent').length >= workflow.maxConnections) break;
+        try {
+          await dismissPopups(page);
+          console.log(`  → Attempting to click connect for ${p.name} (card ${p.cardIndex})`);
+          const clicked = await clickConnectOnCard(page, p.cardIndex);
+          if (!clicked) {
+            results.push({ name: p.name, profileUrl: p.profileUrl, status: 'failed', error: 'Could not click' });
+            continue;
+          }
+          const sent = await handleConnectDialog(page, workflow.connectionNote ?? null, p.name);
+          if (sent) {
+            results.push({ name: p.name, profileUrl: p.profileUrl, status: 'sent' });
+            // send immediate result for frontend polling
+            sendConnectionResult(results[results.length - 1], workflowId);
+          } else {
+            results.push({ name: p.name, profileUrl: p.profileUrl, status: 'failed', error: 'Dialog handling failed' });
+          }
+          await dismissPopups(page);
+          await page.waitForTimeout(800 + Math.random() * 400);
+        } catch (err) {
+          results.push({ name: p.name, profileUrl: p.profileUrl, status: 'failed', error: String(err) });
+        }
       }
 
-      console.log(`\n📋 Found ${pageProfiles.length} connectable profiles on page ${currentPage}:`);
-      pageProfiles.forEach((p, i) => {
-        console.log(`  ${i + 1}. ${p.name} → ${p.profileUrl}`);
-      });
-
-      // Add profiles from this page
-      allProfiles = [...allProfiles, ...pageProfiles];
-
-      // Check if we have enough profiles or if there are more pages
-      if (allProfiles.length >= workflow.maxConnections) {
-        console.log(`✅ Reached target of ${workflow.maxConnections} profiles`);
-        break;
-      }
-
-      // Try to load next page
-      console.log(
-        `⚠️  Only ${allProfiles.length} profiles found so far, which is less than the configured maxConnections (${workflow.maxConnections}).`
-      );
-      console.log("📄 Attempting to load next page...");
-
-      const hasNextPage = await loadNextPage(page);
-      if (!hasNextPage) {
-        console.log("⚠️  No more pages available");
-        break;
-      }
+      // if still not enough, open next page in new tab and process there
+      const sentCount = results.filter(r => r.status === 'sent').length;
+      if (sentCount >= workflow.maxConnections) break;
 
       currentPage++;
-    }
+      if (currentPage > MAX_PAGES) break;
 
-    if (allProfiles.length === 0) {
-      console.log("⚠️  No connectable profiles found across all pages");
-      return { totalFound: 0, results: [] };
-    }
-
-    console.log(`\n✅ Total profiles collected: ${allProfiles.length}`);
-
-    // 7. Send connection requests (up to maxConnections, max 10 per page)
-    results.length = 0; // reset in case of retry
-    const limit = Math.min(allProfiles.length, workflow.maxConnections, 10);
-
-    for (let i = 0; i < limit; i++) {
-      const { name, profileUrl, cardIndex } = allProfiles[i];
-
+      const nextPage = await session.context.newPage();
       try {
-        console.log(`\n${"─".repeat(40)}`);
-        console.log(` [${i + 1}/${limit}] ${name}`);
+        const url = new URL(searchUrlBase);
+        url.searchParams.set('page', String(currentPage));
+        console.log(`Opening next page tab: ${url.toString()}`);
+        await nextPage.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await nextPage.waitForSelector('div[role="listitem"]', { timeout: 10000 }).catch(() => {});
+        await dismissPopups(nextPage);
+        await scrollToLoadAllResults(nextPage);
+        const nextProfiles = await extractConnectableProfiles(nextPage);
 
-        await dismissPopups(page);
-
-        // Click Connect
-        const clicked = await clickConnectOnCard(page, cardIndex);
-        if (!clicked) {
-          results.push({
-            name,
-            profileUrl,
-            status: "failed",
-            error: "Could not click Connect button",
-          });
-          continue;
-        }
-        console.log("  📨 Clicked Connect button");
-
-        // Handle dialog (send without note / add note + send)
-        const sent = await handleConnectDialog(
-          page,
-          workflow.connectionNote,
-          name
-        );
-
-        if (sent) {
-          console.log(`  ✅ Connection request sent to ${name}!`);
-          results.push({ name, profileUrl, status: "sent" });
-        } else {
-          results.push({
-            name,
-            profileUrl,
-            status: "failed",
-            error: "Could not complete connection dialog",
-          });
+        for (const p of nextProfiles) {
+          if (results.filter(r => r.status === 'sent').length >= workflow.maxConnections) break;
+          try {
+            await dismissPopups(nextPage);
+            const clicked = await clickConnectOnCard(nextPage, p.cardIndex);
+            if (!clicked) {
+              results.push({ name: p.name, profileUrl: p.profileUrl, status: 'failed', error: 'Could not click' });
+              continue;
+            }
+            const sent = await handleConnectDialog(nextPage, workflow.connectionNote || null, p.name);
+            if (sent) {
+              results.push({ name: p.name, profileUrl: p.profileUrl, status: 'sent' });
+              sendConnectionResult(results[results.length - 1], workflowId);
+            } else {
+              results.push({ name: p.name, profileUrl: p.profileUrl, status: 'failed', error: 'Dialog failed' });
+            }
+            await dismissPopups(nextPage);
+            await nextPage.waitForTimeout(800 + Math.random() * 400);
+          } catch (err) {
+            results.push({ name: p.name, profileUrl: p.profileUrl, status: 'failed', error: String(err) });
+          }
         }
 
-        await dismissPopups(page);
-
-        // Quick 1s delay between connections
-        if (i < limit - 1) {
-          const delay = 1000;
-          console.log(`  ⏳ 1s pause...`);
-          await page.waitForTimeout(delay);
-        }
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Unknown error";
-        console.error(`  ❌ Error for ${name}:`, errorMsg);
-
-        // Check if browser is still alive
-        try {
-          await page.title();
-        } catch {
-          console.error("💥 Browser crashed, stopping");
-          results.push({ name, profileUrl, status: "failed", error: "Browser crashed" });
-          break;
-        }
-
-        results.push({ name, profileUrl, status: "failed", error: errorMsg });
-
-        // Dismiss any stuck dialogs before continuing
-        await dismissPopups(page);
-        await page.waitForTimeout(200);
+        await nextPage.close();
+      } catch (err) {
+        try { await nextPage.close(); } catch {}
+        // fallback: try to advance original page
+        const advanced = await loadNextPage(page);
+        if (!advanced) break;
       }
     }
 
-    // 8. Summary
-    const sentCount = results.filter((r) => r.status === "sent").length;
-    const failedCount = results.filter((r) => r.status === "failed").length;
-    console.log(
-      `\n🏁 Done! ${sentCount} sent, ${failedCount} failed out of ${results.length}`
-    );
+    // update DB stats
+    const sent = results.filter(r => r.status === 'sent').length;
+    const failed = results.filter(r => r.status === 'failed').length;
+    await prisma.workflow.update({ where: { id: workflowId }, data: { totalSent: { increment: sent }, totalFailed: { increment: failed }, lastRunAt: new Date(), status: 'active', connectionData: results.map(r => JSON.stringify(r)) } }).catch(() => {});
 
-    // 9. Update workflow stats + connectionData in DB
-    await prisma.workflow.update({
-      where: { id: workflowId },
-      data: {
-        totalSent: { increment: sentCount },
-        totalFailed: { increment: failedCount },
-        lastRunAt: new Date(),
-        status: "active",
-        connectionData: results.map((r) => JSON.stringify(r)),
-      },
-    });
-
-    return { totalFound: allProfiles.length, results };
-  } catch (error) {
-    console.error(`❌ Workflow ${workflowId} failed:`, error);
-
-    await prisma.workflow.update({
-      where: { id: workflowId },
-      data: { status: "failed" },
-    });
-
-    throw error;
+    return { totalFound: results.length, results };
+  } catch (err) {
+    await prisma.workflow.update({ where: { id: workflowId }, data: { status: 'failed' } }).catch(() => {});
+    throw err;
   } finally {
-    // Close the TAB only (not the browser — session-manager handles lifecycle)
+    try { await page.close(); } catch {}
 
-      await page.close();
-      console.log("🔒 Closed workflow tab");
+    try {
+      const finalSent = results.filter(r => r.status === 'sent').length;
+      const finalFailed = results.filter(r => r.status === 'failed').length;
+      const html = buildReportEmail({ userName: workflow.user.name || 'there', workflowName: workflow.name, targetCompany: workflow.targetCompany, totalFound: results.length, sentCount: finalSent, failedCount: finalFailed, connections: results, executedAt: new Date() });
 
-      // Gather final results for the email
-      const finalSent = results.filter((r) => r.status === "sent").length;
-      const finalFailed = results.filter((r) => r.status === "failed").length;
-
-      const htmlBody = buildReportEmail({
-        userName: workflow.user.name || "there",
-        workflowName: workflow.name,
-        targetCompany: workflow.targetCompany,
-        totalFound: results.length,
-        sentCount: finalSent,
-        failedCount: finalFailed,
-        connections: results,
-        executedAt: new Date(),
-      });
-
-      await transporter.sendMail({
-        from: `"AutoReferrals" <${process.env.SMTP_FROM || "bajpai.shashwat.332@gmail.com"}>`,
-        to: workflow.user.email,
-        subject: `✅ Workflow "${workflow.name}" — ${finalSent} connections sent`,
-        text: `Your workflow "${workflow.name}" targeting ${workflow.targetCompany} has completed. ${finalSent} sent, ${finalFailed} failed.`,
-        html: htmlBody,
-      });
-
-      console.log("📧 Report email sent to", workflow.user.email);
-
-      try{
-        // check for the active tabs using the session in browser using playwright 
-
-        if(session && session.context){
-          const openTabs=await session.context.pages();
-
-          if(openTabs.length<=1){
-            console.log("🔒 No other tabs open, closing browser session for user",workflow.userId);
-            await closeSession(workflow.userId);
-           
-        }
-      }
+      await transporter.sendMail({ from: process.env.SMTP_FROM || 'noreply@example.com', to: workflow.user.email, subject: `Workflow ${workflow.name} — ${finalSent} connections`, text: `${finalSent} sent, ${finalFailed} failed`, html }).catch(() => {});
+    } catch (e) {
+      console.error('Email/report failed', e);
     }
 
-     catch (emailErr) {
-      console.error("⚠️  Failed to close tab or send email:", emailErr);
-    }
+    try {
+      const pages = await session.context.pages();
+      if (pages.length <= 1) await closeSession(workflow.userId);
+    } catch {}
   }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════
-// Beautiful HTML Email Builder
-// ═══════════════════════════════════════════════════════════════════
-
+// Minimal HTML report builder
 function buildReportEmail(data: {
   userName: string;
   workflowName: string;
@@ -850,4 +606,3 @@ function buildReportEmail(data: {
 </body>
 </html>`;
 }
-

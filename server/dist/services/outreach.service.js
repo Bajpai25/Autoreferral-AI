@@ -1,8 +1,42 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getOutreach = void 0;
 exports.loginLinkedInWithCookies = loginLinkedInWithCookies;
 exports.loginLinkedIn = loginLinkedIn;
+exports.sendConnectionResult = sendConnectionResult;
 exports.searchAndMessageEmployees = searchAndMessageEmployees;
 const constant_1 = require("../utils/constant");
 const playwright_1 = require("playwright");
@@ -198,6 +232,36 @@ async function scrollToLoadAllResults(page) {
     await page.waitForTimeout(200);
     console.log(`📜 Total cards discovered: ${previousCardCount}`);
     return `This is the profiles received as your connections: ${previousCardCount}`;
+}
+// Send message/connection result to backend API so frontend can poll it.
+async function sendConnectionResult(result, messageId) {
+    const base = process.env.API_BASE || "http://localhost:8000";
+    const url = `${base.replace(/\/$/, "")}/api/workflows/workflow-results`;
+    try {
+        if (typeof fetch === "undefined") {
+            try {
+                const undici = await Promise.resolve().then(() => __importStar(require("undici")));
+                // @ts-ignore
+                global.fetch = undici.fetch;
+            }
+            catch { }
+        }
+        const payload = { workflowId: messageId, ...result };
+        console.log("→ sendConnectionResult POST to", url, payload.name);
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            keepalive: true,
+        });
+        if (!res.ok) {
+            const text = await res.text().catch(() => "");
+            console.error("⚠️  sendConnectionResult failed:", res.status, text);
+        }
+    }
+    catch (err) {
+        console.error("⚠️  Failed to send connection result to API:", err);
+    }
 }
 // ─── Helper: Extract messageable profiles from the current page ───
 async function extractMessageableProfiles(page) {
@@ -445,7 +509,7 @@ async function closeMessageDialog(page) {
     }
 }
 // ─── Main: Search and message employees ───
-async function searchAndMessageEmployees(page, companyName, messageTemplate, messageId, maxMessages = 10, delayBetweenMessages = 3000, maxPages = 1) {
+async function searchAndMessageEmployees(page, companyName, messageTemplate, messageId, maxMessages = 30, delayBetweenMessages = 3000, maxPages = 12) {
     // Navigate to search
     const searchUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(companyName)}&network=%5B%22F%22%5D&origin=FACETED_SEARCH`;
     console.log(`\n🔍 Navigating to search: ${searchUrl}`);
@@ -550,6 +614,11 @@ async function searchAndMessageEmployees(page, companyName, messageTemplate, mes
             await dismissPopups(page);
             console.log(`  ✅ Message sent to ${name}!`);
             results.push({ name, profileUrl, status: "sent" });
+            // inform frontend immediately
+            try {
+                sendConnectionResult(results[results.length - 1], messageId);
+            }
+            catch (e) { }
             // Human-like delay before next message
             if (i < limit - 1) {
                 const delay = delayBetweenMessages + randomDelay(500, 1500);
@@ -582,109 +651,172 @@ async function searchAndMessageEmployees(page, companyName, messageTemplate, mes
             await page.waitForTimeout(randomDelay(200, 400));
         }
     }
-    // ─── Pagination: process additional pages if configured ───
+    // ─── Pagination: process additional pages using new tabs (deterministic) ───
     let currentPage = 1;
     while (currentPage < maxPages && results.filter((r) => r.status === "sent").length < maxMessages) {
-        console.log(`\n📄 Looking for page ${currentPage + 1}...`);
-        // Scroll to the bottom to expose pagination controls
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(randomDelay(500, 1000));
-        // Try to find and click "Next" button
-        const nextBtnSelectors = [
-            'button[aria-label="Next"]',
-            'button.artdeco-pagination__button--next',
-            'li.artdeco-pagination__indicator--number.active + li button',
-        ];
-        let nextClicked = false;
-        for (const sel of nextBtnSelectors) {
-            try {
-                const btn = await page.$(sel);
-                if (btn && (await btn.isVisible()) && (await btn.isEnabled())) {
-                    await btn.click();
-                    nextClicked = true;
-                    console.log(`  ➡️  Clicked Next page button`);
-                    break;
+        currentPage++;
+        console.log(`\n📄 Opening page ${currentPage} in a new tab...`);
+        const nextPage = await page.context().newPage();
+        try {
+            const url = new URL(searchUrl);
+            url.searchParams.set('page', String(currentPage));
+            await nextPage.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await nextPage.waitForSelector('div[role="listitem"]', { timeout: 10000 }).catch(() => { });
+            await dismissPopups(nextPage);
+            await scrollToLoadAllResults(nextPage);
+            const newCardData = await extractMessageableProfiles(nextPage);
+            console.log(`\n📋 Page ${currentPage}: Found ${newCardData.length} messageable profiles`);
+            if (newCardData.length === 0) {
+                console.log('  ⚠️  No profiles found on this page — closing tab and stopping pagination');
+                await nextPage.close();
+                break;
+            }
+            const remainingSlots = maxMessages - results.filter((r) => r.status === "sent").length;
+            for (let i = 0; i < Math.min(newCardData.length, remainingSlots); i++) {
+                const { name: searchName, profileUrl, cardIndex } = newCardData[i];
+                let name = searchName;
+                try {
+                    console.log(`\n${"=".repeat(50)}`);
+                    console.log(` [Page ${currentPage} - ${i + 1}/${Math.min(newCardData.length, remainingSlots)}] ${searchName}`);
+                    await dismissPopups(nextPage);
+                    const clicked = await clickMessageButtonOnCard(nextPage, cardIndex);
+                    if (!clicked) {
+                        results.push({ name: searchName, profileUrl, status: "failed", error: "Could not click Message button" });
+                        continue;
+                    }
+                    await nextPage.waitForTimeout(randomDelay(500, 800));
+                    const dialogName = await extractNameFromMessageDialog(nextPage);
+                    name = dialogName || searchName;
+                    const res = await typeAndSendMessage(nextPage, messageTemplate, name);
+                    if (!res.sent) {
+                        await closeMessageDialog(nextPage);
+                        results.push({ name, profileUrl, status: "failed", error: "Could not type/send message" });
+                        continue;
+                    }
+                    await closeMessageDialog(nextPage);
+                    await dismissPopups(nextPage);
+                    console.log(`  ✅ Message sent to ${name}!`);
+                    results.push({ name, profileUrl, status: "sent" });
+                    try {
+                        sendConnectionResult(results[results.length - 1], messageId);
+                    }
+                    catch (e) { }
+                    // small human-like delay
+                    if (results.filter((r) => r.status === "sent").length < maxMessages) {
+                        const delay = delayBetweenMessages + randomDelay(500, 1500);
+                        await nextPage.waitForTimeout(delay);
+                    }
                 }
+                catch (error) {
+                    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+                    console.error(`  ❌ Error for ${name}:`, errorMsg);
+                    try {
+                        await nextPage.title();
+                    }
+                    catch {
+                        console.error("💥 Tab crashed, stopping pagination");
+                        results.push({ name, profileUrl, status: "failed", error: "Tab crashed" });
+                        break;
+                    }
+                    results.push({ name, profileUrl, status: "failed", error: errorMsg });
+                    await dismissPopups(nextPage);
+                    await closeMessageDialog(nextPage);
+                    await dismissPopups(nextPage);
+                }
+            }
+            await nextPage.close();
+        }
+        catch (err) {
+            try {
+                await nextPage.close();
             }
             catch { }
-        }
-        if (!nextClicked) {
-            console.log('  ⚠️  No Next page button found — stopping pagination');
+            console.log('  ⚠️  Failed to open/process next page tab — stopping pagination');
             break;
         }
+    }
+    // ─── Pagination: process additional pages using new tabs (deterministic) ───
+    currentPage = 1;
+    while (currentPage < maxPages && results.filter((r) => r.status === "sent").length < maxMessages) {
         currentPage++;
-        // Wait for next page to load
+        console.log(`\n📄 Opening page ${currentPage} in a new tab...`);
+        const nextPage = await page.context().newPage();
         try {
-            await page.waitForSelector('div[role="listitem"]', { timeout: 15000 });
-            await page.waitForTimeout(randomDelay(800, 1500));
-        }
-        catch {
-            console.log('  ⚠️  Next page did not load — stopping pagination');
-            break;
-        }
-        // Dismiss any popups on the new page
-        await dismissPopups(page);
-        // Scroll to load all results on the new page
-        await scrollToLoadAllResults(page);
-        // Extract new profiles
-        const newCardData = await extractMessageableProfiles(page);
-        console.log(`\n📋 Page ${currentPage}: Found ${newCardData.length} messageable profiles`);
-        if (newCardData.length === 0) {
-            console.log('  ⚠️  No profiles found on this page — stopping pagination');
-            break;
-        }
-        // Process profiles on this page
-        const remainingSlots = maxMessages - results.filter((r) => r.status === "sent").length;
-        const pageLimit = Math.min(newCardData.length, remainingSlots);
-        for (let i = 0; i < pageLimit; i++) {
-            const { name: searchName, profileUrl, cardIndex } = newCardData[i];
-            let name = searchName;
-            try {
-                console.log(`\n${"=".repeat(50)}`);
-                console.log(` [Page ${currentPage} - ${i + 1}/${pageLimit}] ${searchName}`);
-                await dismissPopups(page);
-                const clicked = await clickMessageButtonOnCard(page, cardIndex);
-                if (!clicked) {
-                    results.push({ name: searchName, profileUrl, status: "failed", error: "Could not click Message button" });
-                    continue;
-                }
-                console.log(`  📩 Clicked Message button`);
-                await page.waitForTimeout(randomDelay(500, 800));
-                const dialogName = await extractNameFromMessageDialog(page);
-                name = dialogName || searchName;
-                const result = await typeAndSendMessage(page, messageTemplate, name);
-                if (!result.sent) {
-                    await closeMessageDialog(page);
-                    results.push({ name, profileUrl, status: "failed", error: "Could not type/send message" });
-                    continue;
-                }
-                await closeMessageDialog(page);
-                await dismissPopups(page);
-                console.log(`  ✅ Message sent to ${name}!`);
-                results.push({ name, profileUrl, status: "sent" });
-                if (i < pageLimit - 1) {
-                    const delay = delayBetweenMessages + randomDelay(500, 1500);
-                    console.log(`  ⏳ Waiting ${Math.round(delay / 1000)}s before next...`);
-                    await page.waitForTimeout(delay);
-                }
+            const url = new URL(searchUrl);
+            url.searchParams.set('page', String(currentPage));
+            await nextPage.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await nextPage.waitForSelector('div[role="listitem"]', { timeout: 10000 }).catch(() => { });
+            await dismissPopups(nextPage);
+            await scrollToLoadAllResults(nextPage);
+            const newCardData = await extractMessageableProfiles(nextPage);
+            console.log(`\n📋 Page ${currentPage}: Found ${newCardData.length} messageable profiles`);
+            if (newCardData.length === 0) {
+                console.log('  ⚠️  No profiles found on this page — closing tab and stopping pagination');
+                await nextPage.close();
+                break;
             }
-            catch (error) {
-                const errorMsg = error instanceof Error ? error.message : "Unknown error";
-                console.error(`  ❌ Error for ${name}:`, errorMsg);
+            const remainingSlots = maxMessages - results.filter((r) => r.status === "sent").length;
+            for (let i = 0; i < Math.min(newCardData.length, remainingSlots); i++) {
+                const { name: searchName, profileUrl, cardIndex } = newCardData[i];
+                let name = searchName;
                 try {
-                    await page.title();
+                    console.log(`\n${"=".repeat(50)}`);
+                    console.log(` [Page ${currentPage} - ${i + 1}/${Math.min(newCardData.length, remainingSlots)}] ${searchName}`);
+                    await dismissPopups(nextPage);
+                    const clicked = await clickMessageButtonOnCard(nextPage, cardIndex);
+                    if (!clicked) {
+                        results.push({ name: searchName, profileUrl, status: "failed", error: "Could not click Message button" });
+                        continue;
+                    }
+                    await nextPage.waitForTimeout(randomDelay(500, 800));
+                    const dialogName = await extractNameFromMessageDialog(nextPage);
+                    name = dialogName || searchName;
+                    const res = await typeAndSendMessage(nextPage, messageTemplate, name);
+                    if (!res.sent) {
+                        await closeMessageDialog(nextPage);
+                        results.push({ name, profileUrl, status: "failed", error: "Could not type/send message" });
+                        continue;
+                    }
+                    await closeMessageDialog(nextPage);
+                    await dismissPopups(nextPage);
+                    console.log(`  ✅ Message sent to ${name}!`);
+                    results.push({ name, profileUrl, status: "sent" });
+                    try {
+                        sendConnectionResult(results[results.length - 1], messageId);
+                    }
+                    catch (e) { }
+                    // small human-like delay
+                    if (results.filter((r) => r.status === "sent").length < maxMessages) {
+                        const delay = delayBetweenMessages + randomDelay(500, 1500);
+                        await nextPage.waitForTimeout(delay);
+                    }
                 }
-                catch {
-                    console.error("💥 Browser crashed, stopping");
-                    results.push({ name, profileUrl, status: "failed", error: "Browser crashed" });
-                    break;
+                catch (error) {
+                    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+                    console.error(`  ❌ Error for ${name}:`, errorMsg);
+                    try {
+                        await nextPage.title();
+                    }
+                    catch {
+                        console.error("💥 Tab crashed, stopping pagination");
+                        results.push({ name, profileUrl, status: "failed", error: "Tab crashed" });
+                        break;
+                    }
+                    results.push({ name, profileUrl, status: "failed", error: errorMsg });
+                    await dismissPopups(nextPage);
+                    await closeMessageDialog(nextPage);
+                    await dismissPopups(nextPage);
                 }
-                results.push({ name, profileUrl, status: "failed", error: errorMsg });
-                await dismissPopups(page);
-                await closeMessageDialog(page);
-                await dismissPopups(page);
-                await page.waitForTimeout(randomDelay(200, 400));
             }
+            await nextPage.close();
+        }
+        catch (err) {
+            try {
+                await nextPage.close();
+            }
+            catch { }
+            console.log('  ⚠️  Failed to open/process next page tab — stopping pagination');
+            break;
         }
     }
     // Summary

@@ -342,9 +342,9 @@ export async function getLinkedInCookiesViaManualLogin(email?: string) {
     if (email) {
       console.log(`Pre-filling email: ${email}`);
       try {
-        await page.fill('input[name="session_key"]', email);
+        await page.fill('input[type="email"]', email);
         // Focus the password field so user just needs to type password
-        await page.click('input[name="session_password"]');
+        await page.click('input[type="session_password"]');
       } catch (e) {
         console.log(" Could not pre-fill email field");
       }
