@@ -65,8 +65,10 @@ router.post("/workflow-results", (req, res) => {
 
 // GET /workflow-results?workflowId=...  (for frontend polling)
 router.get("/workflow-results", (req, res) => {
-  const wid = String(req.query.workflowId || "unknown");
-  const items = workflowResults.get(wid) || [];
+  const workflowId = req.query.workflowId;
+  const items = workflowId
+    ? workflowResults.get(String(workflowId)) || []
+    : Array.from(workflowResults.values()).flat();
   return res.json(items);
 });
 

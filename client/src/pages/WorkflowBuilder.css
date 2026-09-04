@@ -5,7 +5,7 @@
 
    .wf-notice-toast {
   position: fixed;
-  bottom: 24px;
+    top: 76px;
   right: 24px;
   display: flex;
   align-items: center;
@@ -57,6 +57,73 @@
 .wf-notice-toast__status {
   font-size: 12px;
   color: #aaa;
+}
+
+.workflow-tabs {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.workflow-tabs__items {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.workflow-tab,
+.workflow-tabs__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 0;
+  background: transparent;
+  color: #888;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workflow-tab {
+  padding: 0 12px;
+  border-bottom: 2px solid transparent;
+}
+
+.workflow-tab:hover,
+.workflow-tab--active {
+  color: #fff;
+}
+
+.workflow-tab--active {
+  border-bottom-color: #00e6e6;
+}
+
+.workflow-tab__close {
+  display: inline-flex;
+  padding: 3px;
+  color: #666;
+}
+
+.workflow-tab__close:hover {
+  color: #ff7777;
+}
+
+.workflow-tabs__add {
+  justify-content: center;
+  width: 32px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  color: #aaa;
+}
+
+.workflow-tabs__add:hover {
+  color: #00e6e6;
 }
 
 :root {

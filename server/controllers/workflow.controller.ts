@@ -23,6 +23,8 @@ export const createWorkflow = async (req: Request, res: Response) => {
       connectionNote,
       nodesJson,
       edgesJson,
+      outReachFlag = false,
+      messageId,
     } = req.body;
 
     if (!name || !targetCompany) {
@@ -30,6 +32,25 @@ export const createWorkflow = async (req: Request, res: Response) => {
         success: false,
         message: "Missing required fields: name, targetCompany",
       });
+    }
+
+    if (outReachFlag && !messageId) {
+      return res.status(400).json({
+        success: false,
+        message: "Outreach workflows require a messageId",
+      });
+    }
+
+    if (messageId) {
+      const outreach = await prisma.outreach.findFirst({
+        where: { id: messageId, userId },
+      });
+      if (!outreach) {
+        return res.status(400).json({
+          success: false,
+          message: "Outreach message not found for this user",
+        });
+      }
     }
 
     const workflow = await prisma.workflow.create({
@@ -41,6 +62,8 @@ export const createWorkflow = async (req: Request, res: Response) => {
         connectionNote: connectionNote || null,
         nodesJson: nodesJson || null,
         edgesJson: edgesJson || null,
+        outReachFlag: Boolean(outReachFlag),
+        messageId: messageId || null,
         userId,
         status: "active",
       },
@@ -122,6 +145,8 @@ export const updateWorkflow = async (req: Request, res: Response) => {
       status,
       nodesJson,
       edgesJson,
+      outReachFlag,
+      messageId,
     } = req.body;
 
     const workflow = await prisma.workflow.update({
@@ -135,6 +160,8 @@ export const updateWorkflow = async (req: Request, res: Response) => {
         status: status || existing.status,
         nodesJson: nodesJson !== undefined ? nodesJson : existing.nodesJson,
         edgesJson: edgesJson !== undefined ? edgesJson : existing.edgesJson,
+        outReachFlag: outReachFlag !== undefined ? Boolean(outReachFlag) : existing.outReachFlag,
+        messageId: messageId !== undefined ? messageId : existing.messageId,
       },
     });
 
@@ -173,6 +200,7 @@ export const patchWorkflow = async (req: Request, res: Response) => {
     const allowedFields = [
       "name", "targetCompany", "cronExpression", "maxConnections",
       "connectionNote", "status", "nodesJson", "edgesJson",
+      "outReachFlag", "messageId",
     ];
 
     for (const field of allowedFields) {

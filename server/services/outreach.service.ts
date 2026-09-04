@@ -319,8 +319,10 @@ async function extractMessageableProfiles(page: Page): Promise<ProfileCard[]> {
       const profileLink = card.querySelector('a[href*="/in/"]') as HTMLAnchorElement | null;
       if (profileLink) {
         profileUrl = profileLink.getAttribute("href") || "";
+
         // Name is direct text content of the <a> tag
-        name = profileLink.textContent?.trim() || "";
+        name = profileUrl ? profileUrl.split("/in/")[1].replace(/\/$/, '') : "";
+        console.log(name , "name outreach wala hh")
       }
 
       // Clean up name — remove any degree indicators that might have leaked in
@@ -597,9 +599,10 @@ export async function searchAndMessageEmployees(
   companyName: string,
   messageTemplate: string,
   messageId: string,
-  maxMessages: number = 30,
+  maxMessages: number = 10,
   delayBetweenMessages: number = 3000,
-  maxPages: number = 12
+  maxPages: number = 7,
+  resultWorkflowId?: string
 ): Promise<{ totalFound: number; results: MessageResult[] }> {
   // Navigate to search
   const searchUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(
@@ -730,7 +733,7 @@ export async function searchAndMessageEmployees(
       console.log(`  ✅ Message sent to ${name}!`);
       results.push({ name, profileUrl, status: "sent" });
       // inform frontend immediately
-      try { sendConnectionResult(results[results.length - 1], messageId); } catch (e) {}
+      try { sendConnectionResult(results[results.length - 1], resultWorkflowId || messageId); } catch (e) {}
 
       // Human-like delay before next message
       if (i < limit - 1) {
@@ -822,7 +825,7 @@ export async function searchAndMessageEmployees(
 
           console.log(`  ✅ Message sent to ${name}!`);
           results.push({ name, profileUrl, status: "sent" });
-          try { sendConnectionResult(results[results.length - 1], messageId); } catch (e) {}
+          try { sendConnectionResult(results[results.length - 1], resultWorkflowId || messageId); } catch (e) {}
 
           // small human-like delay
           if (results.filter((r) => r.status === "sent").length < maxMessages) {
@@ -906,7 +909,7 @@ export async function searchAndMessageEmployees(
 
             console.log(`  ✅ Message sent to ${name}!`);
             results.push({ name, profileUrl, status: "sent" });
-            try { sendConnectionResult(results[results.length - 1], messageId); } catch (e) {}
+            try { sendConnectionResult(results[results.length - 1], resultWorkflowId || messageId); } catch (e) {}
 
             // small human-like delay
             if (results.filter((r) => r.status === "sent").length < maxMessages) {

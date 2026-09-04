@@ -24,6 +24,7 @@ export async function scrapeJobData(userId:String , JobLink:String){
     }
     
     localStorage.setItem("jobId",data?.data?.id);
+    return data?.data;
    }
    catch(e){
       return alert(`Internal Server Error: ${e}`);
@@ -161,6 +162,24 @@ messageTemplate:localStorage.getItem("message")
     }
 }
 
+export async function updateOutreachMessage(messageId: string, message: string) {
+  const response = await fetch(`${outreachUrl}${encodeURIComponent(messageId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${sessionStorage.getItem("authToken")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data?.message || "Failed to save edited message");
+  }
+
+  return data?.data;
+}
+
 export async function getJobs(userId:string){
   try{
  const response=await fetch(jobUrl+"getJobs",{
@@ -226,6 +245,8 @@ export async function createAndTriggerWorkflow(payload: {
   connectionNote?: string;
   nodesJson?: any;
   edgesJson?: any;
+  outReachFlag?: boolean;
+  messageId?: string;
 }): Promise<any> {
   // 1. Create the workflow on the backend (registers cron job)
   const createRes = await fetch(workflowUrl, {

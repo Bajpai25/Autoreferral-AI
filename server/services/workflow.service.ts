@@ -306,13 +306,17 @@ export async function executeWorkflow(workflowId: string): Promise<{ totalFound:
   try {
     const searchUrlBase = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(workflow.targetCompany)}&origin=FACETED_SEARCH&network=%5B%22S%22%2C%22O%22%5D`;
 
-    // If this workflow has an associated outreach/message template id, delegate to outreach service
-    const outreachMessageId = (workflow as any).messageId || (workflow as any).outreachId || (workflow as any).outreachMessageId || null;
-    if (outreachMessageId) {
-      console.log(`Detected outreach messageId ${outreachMessageId} on workflow ${workflowId} — delegating to outreach service`);
+    // Outreach workflows send the stored generated message; regular workflows only send connections.
+    if (workflow.outReachFlag) {
+      const outreachMessageId = workflow.messageId;
+      if (!outreachMessageId) {
+        throw new Error(`Outreach workflow ${workflowId} is missing messageId`);
+      }
+
+      console.log(`Running outreach workflow ${workflowId} with message ${outreachMessageId}`);
       try {
         // reuse same session/page
-        const outreachResult = await searchAndMessageEmployees(page, workflow.targetCompany || '', '', String(outreachMessageId), workflow.maxConnections || 30, 1500, 12);
+        const outreachResult = await searchAndMessageEmployees(page, workflow.targetCompany || '', '', outreachMessageId, workflow.maxConnections || 30, 1500, 12, workflowId);
         // searchAndMessageEmployees calls sendConnectionResult for each sent message
         const sent = outreachResult.results.filter(r => r.status === 'sent').length;
         const failed = outreachResult.results.filter(r => r.status === 'failed').length;

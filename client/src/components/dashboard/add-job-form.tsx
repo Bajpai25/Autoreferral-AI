@@ -17,13 +17,15 @@ import {
   extractResumeData,
   combineJobandResume,
   getFinalMessage,
-  sendReferral
+  createAndTriggerWorkflow,
+  updateOutreachMessage,
 } from "../../utils/api"
 
 type AddJobFormProps = {
   initialJob?: Job
-  onCreate?: (job: Omit<Job, "id" | "createdAt">) => void
+  onCreate?: (job: Omit<Job, "id" | "createdAt">) => string | void
   onUpdate?: (job: Omit<Job, "id" | "createdAt">) => void
+  onWorkflowCreated?: (workflow: { id?: string; name: string }) => void
 }
 
 type Step = 1 | 2 | 3 | 4
@@ -32,10 +34,11 @@ export function AddJobForm({
   initialJob,
   onCreate = () => {},
   onUpdate = () => {},
+  onWorkflowCreated = () => {},
 }: AddJobFormProps) {
   const [step, setStep] = useState<Step>(1)
   const [url, setUrl] = useState(initialJob?.url ?? "")
-  const [company] = useState(initialJob?.company ?? "")
+  const [company, setCompany] = useState(initialJob?.company ?? "")
   const [title] = useState(initialJob?.title ?? "")
   const [targetRoles] = useState()
   const [tone, setTone] = useState(initialJob?.tone ?? "Warm")
@@ -95,7 +98,12 @@ export function AddJobForm({
   }
 
   async function handleStep1() {
-    try { setError(null); setLoading(true); await scrapeJobData(localStorage.getItem("userId") || "", url); next() }
+    try {
+      setError(null); setLoading(true)
+      const scrapedJob = await scrapeJobData(localStorage.getItem("userId") || "", url)
+      if (scrapedJob?.companyName) setCompany(scrapedJob.companyName)
+      next()
+    }
     catch (e: any) { setError(e?.message || "Job scraping failed") }
     finally { setLoading(false) }
   }
@@ -117,12 +125,26 @@ export function AddJobForm({
   async function finish() {
     try {
       setError(null); setLoading(true)
-      const data = await sendReferral()
+      const messageId = localStorage.getItem("messageId")
+      if (!messageId) throw new Error("Generate a message before starting outreach")
+      if (!message.trim()) throw new Error("Message cannot be empty")
+
+      await updateOutreachMessage(messageId, message)
+
+      const workflow = await createAndTriggerWorkflow({
+        name: `Outreach - ${company || "Job application"}`,
+        targetCompany: company || "Outreach",
+        cronExpression: "0 9 * * *",
+        maxConnections: 10,
+        outReachFlag: true,
+        messageId,
+      })
       const payload: Omit<Job, "id" | "createdAt"> = {
         url, company: company || "Unknown Company", title: title || "Unknown Role",
         targetRoles, tone, preview, status, candidates: initialJob?.candidates ?? [],
       }
       if (isEditing) { onUpdate(payload) } else { onCreate(payload) }
+      onWorkflowCreated({ id: workflow?.id, name: workflow?.name || `Outreach - ${company || "Job application"}` })
     } catch (e: any) { setError(e?.message || "Message generation failed") }
   }
 

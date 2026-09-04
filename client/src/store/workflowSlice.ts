@@ -8,6 +8,8 @@ export interface SavedWorkflow {
   name: string;
   nodes: Node[];
   edges: Edge[];
+  nodesJson?: Node[];
+  edgesJson?: Edge[];
   createdAt: string;
   updatedAt: string;
 }
@@ -130,8 +132,16 @@ export const workflowSlice = createSlice({
     loadWorkflow: (state, action: PayloadAction<string>) => {
       const wf = state.savedWorkflows.find(w => w.id === action.payload);
       if (wf) {
-        state.nodes = Array.isArray(wf.nodesJson) ? JSON.parse(JSON.stringify(wf.nodesJson)) : JSON.parse(JSON.stringify(defaultNodes));
-        state.edges = Array.isArray(wf.edgesJson) ? JSON.parse(JSON.stringify(wf.edgesJson)) : JSON.parse(JSON.stringify(defaultEdges));
+        state.nodes = Array.isArray(wf.nodesJson)
+          ? JSON.parse(JSON.stringify(wf.nodesJson))
+          : Array.isArray(wf.nodes)
+            ? JSON.parse(JSON.stringify(wf.nodes))
+            : JSON.parse(JSON.stringify(defaultNodes));
+        state.edges = Array.isArray(wf.edgesJson)
+          ? JSON.parse(JSON.stringify(wf.edgesJson))
+          : Array.isArray(wf.edges)
+            ? JSON.parse(JSON.stringify(wf.edges))
+            : JSON.parse(JSON.stringify(defaultEdges));
         state.activeWorkflowId = wf.id;
         state.workflowName = wf.name;
         state.selectedNodeId = null;

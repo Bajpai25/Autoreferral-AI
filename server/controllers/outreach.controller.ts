@@ -188,3 +188,37 @@ console.log(outreachData , "this is the outreachdata");
     }
   }
 }
+
+export async function updateOutreachMessage(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.id;
+    const { id } = req.params;
+    const { message } = req.body as { message?: string };
+
+    if (!userId) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+
+    if (!message?.trim()) {
+      res.status(400).json({ success: false, message: "Message cannot be empty" });
+      return;
+    }
+
+    const outreach = await prisma.outreach.findFirst({ where: { id, userId } });
+    if (!outreach) {
+      res.status(404).json({ success: false, message: "Outreach message not found" });
+      return;
+    }
+
+    const updated = await prisma.outreach.update({
+      where: { id },
+      data: { message: message.trim() },
+    });
+
+    res.status(200).json({ success: true, data: updated });
+  } catch (error) {
+    console.error("Update outreach message error:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}

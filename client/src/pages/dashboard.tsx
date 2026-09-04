@@ -6,17 +6,22 @@ import { JobCards } from '@/components/dashboard/job-cards'
 import { JobTable } from '@/components/dashboard/job-table'
 import { Button } from '@/components/ui/button'
 import { type Job } from '@/types'
-import { Plus } from 'lucide-react'
+import { Plus, X, Workflow } from 'lucide-react'
 import { getJobs, getOutreach } from '@/utils/api'
 import { TraceModal } from '@/components/dashboard/trace-modal'
 import { SiteHeader } from '@/components/site-header'
 import { Link } from 'react-router-dom'
-import { gsap, ScrollTrigger } from '@/lib/gsap'
+import { gsap } from '@/lib/gsap'
+import './WorkflowBuilder.css'
 
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [outreach, setOutreach] = useState<any[]>([])
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [workflowTabs, setWorkflowTabs] = useState<Array<{ id: string; jobId: string | null; label: string; workflowId?: string }>>([
+    { id: 'outreach-new-1', jobId: null, label: 'New outreach' },
+  ])
+  const [activeWorkflowTabId, setActiveWorkflowTabId] = useState('outreach-new-1')
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null)
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
   const mainRef = useRef<HTMLElement>(null)
@@ -117,6 +122,11 @@ export default function DashboardPage() {
     }
     setJobs((prev) => [newJob, ...prev])
     setActiveJobId(newJob.id)
+    setWorkflowTabs((prev) => prev.map((tab) => tab.id === activeWorkflowTabId
+      ? { ...tab, jobId: newJob.id, label: partial.company || 'Outreach workflow' }
+      : tab
+    ))
+    return newJob.id
   }
 
   function updateJob(id: string, updater: (job: Job) => Job) {
@@ -137,28 +147,75 @@ export default function DashboardPage() {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
 
+  function startNewWorkflowTab() {
+    const id = `outreach-new-${Date.now()}`
+    setWorkflowTabs((prev) => [...prev, { id, jobId: null, label: 'New outreach' }])
+    setActiveWorkflowTabId(id)
+    setActiveJobId(null)
+  }
+
+  function handleWorkflowCreated(workflow: { id?: string; name: string }) {
+    const nextId = `outreach-new-${Date.now()}`
+    setWorkflowTabs((prev) => [
+      ...prev.map((tab) => tab.id === activeWorkflowTabId
+        ? { ...tab, label: workflow.name, workflowId: workflow.id }
+        : tab
+      ),
+      { id: nextId, jobId: null, label: 'New outreach' },
+    ])
+    setActiveWorkflowTabId(nextId)
+    setActiveJobId(null)
+  }
+
+  function closeWorkflowTab(id: string) {
+    if (workflowTabs.length === 1) return
+    const remaining = workflowTabs.filter((tab) => tab.id !== id)
+    setWorkflowTabs(remaining)
+    if (activeWorkflowTabId === id) {
+      const next = remaining[remaining.length - 1]
+      setActiveWorkflowTabId(next.id)
+      setActiveJobId(next.jobId)
+    }
+  }
+
   // Poll for connection results and enqueue notifications
   useEffect(() => {
-    let intervalId: any;
+    const workflowIds = workflowTabs
+      .map((tab) => tab.workflowId)
+      .filter((id): id is string => Boolean(id));
+    if (workflowIds.length === 0) return;
+
+    let intervalId: number | undefined;
+    let disposed = false;
     const fetchResults = async () => {
       try {
         const base = (import.meta.env.VITE_API_URL as string) || '';
-        const url = `${base.replace(/\/$/, '')}/workflows/workflow-results`;
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setPolledResults(data);
-          // stop polling once we have results to avoid duplicate notifications
-          if (intervalId) { clearInterval(intervalId); intervalId = null; }
+        const endpoint = `${base.replace(/\/$/, '')}/workflows/workflow-results`;
+        console.debug('[workflow-poll] requesting', workflowIds);
+        const responses = await Promise.all(workflowIds.map(async (workflowId) => {
+          const res = await fetch(`${endpoint}?workflowId=${encodeURIComponent(workflowId)}`);
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+          const data = await res.json();
+          return Array.isArray(data) ? data : [];
+        }));
+        if (!disposed) {
+          const results = responses.flat();
+          console.debug('[workflow-poll] received', results.length, 'results', results.map((item) => item.name));
+          setPolledResults(results);
         }
-      } catch {}
+      } catch (error) {
+        if (!disposed) console.warn('[workflow-poll] request error', error);
+      }
     };
 
     fetchResults();
-    intervalId = setInterval(fetchResults, 2000);
-    return () => { if (intervalId) clearInterval(intervalId); };
-  }, []);
+    intervalId = window.setInterval(fetchResults, 3000);
+    
+    return () => {
+      disposed = true;
+      if (intervalId !== undefined) window.clearInterval(intervalId);
+    };
+  }, [workflowTabs]);
 
   // audio
   const playNotification = () => {
@@ -213,7 +270,7 @@ export default function DashboardPage() {
       </div>
 
       <main ref={mainRef} className="container mx-auto px-4 py-8 relative z-10 mt-12">
-        {/* Notification Toast (bottom popups) */}
+        {/* Notifications stay above the workflow strip while tabs change. */}
         {noticeItem && (
           <div
             className={`wf-notice-toast ${noticeVisible ? 'wf-notice-toast--visible' : ''} ${
@@ -226,11 +283,46 @@ export default function DashboardPage() {
             <div className="wf-notice-toast__content">
               <div className="wf-notice-toast__name">{noticeItem.name}</div>
               <div className="wf-notice-toast__status">
-                {noticeItem.status === 'sent' ? 'Connection request sent' : (noticeItem.error || 'Failed to send')}
+                {noticeItem.status === 'sent' ? 'Referral Message sent' : (noticeItem.error || 'Failed to send')}
               </div>
             </div>
           </div>
         )}
+        <div className="workflow-tabs" role="tablist" aria-label="Outreach workflows">
+          <div className="workflow-tabs__items">
+            {workflowTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeWorkflowTabId === tab.id}
+                className={`workflow-tab ${activeWorkflowTabId === tab.id ? 'workflow-tab--active' : ''}`}
+                onClick={() => {
+                  setActiveWorkflowTabId(tab.id)
+                  setActiveJobId(tab.jobId)
+                }}
+              >
+                <Workflow className="size-3.5" />
+                <span>{tab.label}</span>
+                {workflowTabs.length > 1 && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Close ${tab.label}`}
+                    className="workflow-tab__close"
+                    onClick={(event) => { event.stopPropagation(); closeWorkflowTab(tab.id) }}
+                    onKeyDown={(event) => { if (event.key === 'Enter') { event.stopPropagation(); closeWorkflowTab(tab.id) } }}
+                  >
+                    <X className="size-3" />
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="workflow-tabs__add" onClick={startNewWorkflowTab} title="New outreach workflow">
+            <Plus className="size-4" />
+          </button>
+        </div>
         <div className="fixed inset-0 pointer-events-none bg-gradient-to-br from-cyan-500/10 via-transparent to-indigo-500/10 z-0"></div>
         <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -269,13 +361,14 @@ export default function DashboardPage() {
                 className="relative z-10"
               >
                 <AddJobForm
-                  key={activeJobId ?? 'form'}
+                  key={activeWorkflowTabId}
                   initialJob={activeJob ?? undefined}
                   onCreate={(j) => handleCreateJob(j)}
                   onUpdate={(updated) =>
                     activeJobId &&
                     updateJob(activeJobId, () => ({ ...(updated as Job), id: activeJobId, createdAt: activeJob?.createdAt ?? new Date().toISOString() }))
                   }
+                  onWorkflowCreated={handleWorkflowCreated}
                 />
               </motion.div>
             </AnimatePresence>
